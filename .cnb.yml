@@ -25,3 +25,24 @@ $:
             fi
             git push "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git" "HEAD:${CNB_BRANCH:-main}"
   api_trigger_sync_upstream: *sync_upstream
+
+# 镜像构建：main 有提交（含上面的同步推送）即构建并推送到 CNB Docker 制品库，
+# 服务器用 docker-compose.prod.yml 拉取，watchtower 按标签自动更新。
+main:
+  push:
+    - services:
+        - docker
+      stages:
+        - name: 构建镜像
+          script: |
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            docker build \
+              -t "${IMAGE}:latest" \
+              -t "${IMAGE}:sha-${CNB_COMMIT_SHORT}" \
+              .
+        - name: 登录并推送
+          script: |
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            echo "${CNB_TOKEN}" | docker login -u cnb --password-stdin "${CNB_DOCKER_REGISTRY}"
+            docker push "${IMAGE}:latest"
+            docker push "${IMAGE}:sha-${CNB_COMMIT_SHORT}"

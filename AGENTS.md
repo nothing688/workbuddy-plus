@@ -38,3 +38,18 @@ scripts/sync_upstream.sh --auto --push   # 同上并推送
 仓库页「代码-分支详情」有「同步上游」按钮（`.cnb/web_trigger.yml` + `.cnb.yml`），
 点一下在构建环境跑同一套 `--auto` 流程并可选推回 main；不要把该功能放进面板——
 发布镜像里没有 git 和源码树。
+
+# 部署与链路
+
+`main` 有提交（包括面板/按钮触发的同步推送）→ `.cnb.yml` 的 `main.push` 构建镜像并推到
+`docker.cnb.cool/nothing-2026/workbuddy-plus`（标签 `latest` + `sha-<8位>`）。
+
+服务器首次部署：
+
+```bash
+docker login docker.cnb.cool -u cnb -p <CNB 访问令牌>
+docker compose -f docker-compose.prod.yml up -d
+```
+
+之后 watchtower 每 5 分钟检查 `latest`，有更新自动拉取重建。想手动更新：
+`docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d`。

@@ -1,0 +1,35 @@
+# 服务器部署用（拉取 CNB 制品库镜像，不在本地构建）。
+#   docker login docker.cnb.cool -u cnb -p <访问令牌>
+#   docker compose -f docker-compose.prod.yml up -d
+services:
+  wb2api:
+    image: docker.cnb.cool/nothing-2026/workbuddy-plus:latest
+    container_name: workbuddy2api
+    restart: unless-stopped
+    # 与 docker-compose.yml 相同的 uid 说明：宿主机挂载目录属主不一致会写盘失败。
+    user: "${PUID:-10001}:${PGID:-10001}"
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "7863:7863"
+    volumes:
+      - ./auths:/app/auths
+      - ./data:/app/data
+      - ./config.json:/app/config.json
+    labels:
+      # watchtower 只更新带此标签的容器
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # 自动更新：每 5 分钟检查 latest 是否变化，变了就拉取并重建本容器。
+  # 私有制品库需在宿主机先 docker login（watchtower 复用 ~/.docker/config.json）。
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: wb2api-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_CLEANUP=true
+      - TZ=Asia/Shanghai
