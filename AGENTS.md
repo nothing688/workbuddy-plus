@@ -19,3 +19,18 @@ git push origin "v$VERSION"
 ```
 
 本地构建不注入，面板显示 `dev`。同一分钟再发才会撞号。
+
+# 上游同步
+
+顶层代码由两个来源项目合并而来，它们以纯快照目录内嵌：`workbuddy2api-panel/`（misakano7545）
+和 `workbuddy2api-panel-plus/`（JACKY199503）。快照对应的上游 commit 记在
+`scripts/upstreams.txt`，是三方合并的基线。
+
+```bash
+scripts/sync_upstream.sh                 # 只出差异报告，不改文件
+scripts/sync_upstream.sh --auto          # 一键：合并 + 刷新基线 + 编译测试 + 自动提交
+scripts/sync_upstream.sh --auto --push   # 同上并推送
+```
+
+冲突时结果写到 `<文件>.merge`（带冲突标记），快照和基线**不会前进**，处理完重跑；
+`--auto` 只在工作区干净时运行，构建/测试失败则保留改动不提交。
