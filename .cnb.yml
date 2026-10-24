@@ -1,0 +1,27 @@
+# 上游同步：仓库页「同步上游」按钮触发（.cnb/web_trigger.yml）。
+# 三方合并逻辑在 scripts/sync_upstream.sh，基线见 scripts/upstreams.txt。
+# api_trigger_sync_upstream 是同一套流程的 API 入口，便于用 cnb CLI 手动验证。
+$:
+  web_trigger_sync_upstream: &sync_upstream
+    - docker:
+        image: golang:1.26.10
+      stages:
+        - name: 配置 git 身份
+          script: |
+            git config user.name "cnb"
+            git config user.email "cnb@cnb.cool"
+        - name: 同步上游（合并 + 刷新基线 + 编译测试 + 提交）
+          script: |
+            bash scripts/sync_upstream.sh --auto
+        - name: 推送
+          script: |
+            if [ "${push:-true}" != "true" ]; then
+              echo "未勾选推送，提交仅留在构建环境"
+              exit 0
+            fi
+            if [ -z "$(git log origin/${CNB_BRANCH:-main}..HEAD --oneline 2>/dev/null)" ]; then
+              echo "没有新提交，无需推送"
+              exit 0
+            fi
+            git push "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git" "HEAD:${CNB_BRANCH:-main}"
+  api_trigger_sync_upstream: *sync_upstream

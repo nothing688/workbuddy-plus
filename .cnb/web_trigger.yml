@@ -1,0 +1,11 @@
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 同步上游
+        description: 拉取两个上游最新代码，三方合入主树，跑测试后自动提交
+        event: web_trigger_sync_upstream
+        inputs:
+          push:
+            name: 推送到 main
+            type: switch
+            default: true
