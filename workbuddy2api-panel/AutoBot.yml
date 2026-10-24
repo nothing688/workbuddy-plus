@@ -1,0 +1,106 @@
+# AutoBot.yml —— 参考仓库清单与策略声明。
+# 谁来读它见 .github/workflows/autobot.yml；改行为只改这里，不用改代码。
+
+version: 2
+
+upstream:
+  # 逐个 clone 下来交给 agent 分析的对象。
+  repos:
+    - ardeyouxipianyi/workbuddy2api-hub
+    - yuechuya/WorkBuddy2API-Gateway
+    - HUIdada1/AgentHub
+    - 3155498108/workbuddy-one
+    - sheng-du0521/workbuddy2api
+    - OHCJ099/BuddyHub
+    - hj01857655/WorkBuddy2api
+    - syan-anan/wb-syan
+    - JackAIStudio/dsh-workbuddy-dual
+    - smart-open/TraeWorkAssistant
+    - deltrivx/AutoBuddy
+    - techysy/CreditDaddy
+    - spdw666/multi-agent-checkin-dsh
+    - 1557335006/workbuddy-checkin-tool
+    - Yhx888/dsh-free-egg-credits
+    - Costben/workbuddy2api
+    - zr987459/workbuddy-app
+    - bhh3349/workbuddy2api-prime
+    - dhdbvcg/dsh-workbuddy-console
+    - chengzhi-c/pi-desktop-wtq-pool
+    - chengzhi-c/dsh-wtq-pool
+    - liberation8/hermes-workbuddy-provider
+    - Misaka10091/workbuddy2api-panel
+    - xibai6668/Android-AI-gateway
+    - pandarick916/workbuddy_checkin
+    - 2861292267/DSH-Official-WorkBuddy-Credit-Proxy
+    - ithtelab/workbuddy-manager
+    - caigee-cmd/cli2api
+    - FireOpalus/dsh-workbuddy2api
+    - NextAgentX/qoder-trae-workbuddy-switch
+    - sofs2005/w2a
+    - dingminhua/dsh-connect-workbuddy
+    - newtypepan12-svg/workbuddy-qiandao
+    - pkqzzt/workbuddy2api-panel-plus
+    - rcwowhoo/workbuddy-checkin
+    - lehuaner/SSHMonitor
+    - Faide-cyber/dsh-workbuddy
+    - wefewe/workbuddy2api
+    - ChaYeWuu/dsh-hyperworkbuddy
+    - wicm84266964/Buddy2api
+    - HXX-ita/workbuddy-checkin
+    - thintsing/agent-checkin
+    - stevenwang288/WorkBuddy-Daily
+    - study-yang/workbuddy2codex
+    - gray0128/pi-workbuddy-connect
+    - autumnsentiment/workbuddy-helper
+    - GeekFong/traework-checkin-assistant
+    - jerry9692/dsh-workbuddy2api-panel
+    - babygoton/WorkDaddy
+    - xbmaxx/cli2openai
+    - csszyft/wb2api
+    - PBY-CMYK/workbuddy-daily
+    - interli3/workbuddy-cloud-worker
+    - lxpkwwz/ql_scripts
+    - luoxh8/workbuddy-connect
+    - maiphucgiang/codebuddy2api
+    - a1007479270/aidaka
+    - fancylear/dsh-workbuddy-credits
+    - Libra1337/Reso2api
+    - jin66god/workbuddy2api-panel
+    - HanawaBanana/workbuddy2api
+    - CangShui/workbuddy-gateway
+    - yreidev/workbuddy2api-panel
+    - Practice019/multi2api
+    - zhangdailin/API-Console
+    - aimod-cc/agent2api
+    - orangeboyChen/codebuddy2api
+    - Zhengyuuuui/workbuddy2api
+    - cty1735/wb-proxy
+    - mmqz/cpa-multi-plugins
+    - changexbc/workbuddy-switch
+    - 88lin/workbuddy-auto-signin
+    - baiyea/workbuddy2api-ui
+    - L0NE-6/WorkBuddy-Daily
+    - hawklithm/workbuddy2api
+    - AI-Good-Tool/workbuddy-api
+
+  # 每片 4 个仓串行：串行是硬要求（免费档 10 RPM 共享一个池），
+  # 放大每片只为少付 setup 开销（每片一次 pip install ≈2 分钟）
+  shard_size: 4
+  # 每轮最多真正落地几条（每条要起 agent 写代码、跑测试、开 PR）
+  land_max: 1
+
+policy:
+  base: main
+  branch_prefix: autobot/
+  label: autobot
+
+  # 硬禁项：这是给执行者的线，不是提示词里的软约束
+  never:
+    - push_main
+    - merge
+    - tag
+    - release
+    - deploy
+    - .github/workflows/**
+    - AGENTS.md
+    - config.example.json
