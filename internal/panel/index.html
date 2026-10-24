@@ -331,6 +331,19 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 #reqSummary { flex: 1 1 320px; }
 #reqNote { flex: 0 1 260px; text-align: right; }
 
+/* ── 维护 · 上游同步 ─────────────────────────────────────────────── */
+#view-maint .up-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+#view-maint .up-bar .hint { font-size: 12px; color: var(--ink-3); }
+#view-maint .up-desc { margin: 0 0 2px; font-size: 12px; line-height: 1.6; color: var(--ink-3); }
+#upOut {
+  margin: 12px 0 0; padding: 12px 14px; max-height: 360px; overflow: auto;
+  font: 12px/1.7 var(--mono); white-space: pre-wrap; word-break: break-all;
+  color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+#upOut.bad { color: var(--bad); }
+#upOut:empty { display: none; }
+
 /* ── 配置表单 ─────────────────────────────────────────────────────── */
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
@@ -708,6 +721,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
+      <li><a href="#maint" data-view="maint">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3"/></svg>
+        维护</a></li>
       <li><a href="#keys" data-view="keys">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         API 密钥</a></li>
@@ -1387,6 +1403,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button type="submit" class="primary" id="btnCfgSave">保存配置</button>
         </div>
       </form>
+    </section>
+
+    <!-- 维护 -->
+    <section class="view" id="view-maint" hidden>
+      <div class="box">
+        <header>
+          <h3>上游同步 <span class="hint">合并两个上游快照项目并刷新基线</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="upMode">—</span>
+          <button class="xs primary" id="btnUpstreamSync" disabled>立即同步</button>
+        </header>
+        <div class="pad">
+          <div class="up-bar">
+            <span class="tag mute" id="upState">空闲</span>
+            <span class="hint" id="upStartedAt">开始时间 —</span>
+            <span class="hint" id="upBuild">构建号 —</span>
+          </div>
+          <p class="up-desc" id="upDesc">正在读取同步状态…</p>
+          <pre id="upOut"></pre>
+        </div>
+      </div>
     </section>
 
     <!-- 日志 -->

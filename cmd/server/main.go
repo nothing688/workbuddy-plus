@@ -395,9 +395,11 @@ func main() {
 		RedisMode:        redisMode,
 		StickyCount:      sessCount,
 		Version:          appVersion,
+		// 一键同步上游：cnb（触发远程构建）/ local（本地跑同步脚本）两模式。
+		UpstreamSync: cfg.Panel.UpstreamSync,
 		// 对外分发的子密钥库：密钥页读写 / 网关侧校验共用同一 Store。
-		Keys:             ks,
-		Live:             live,
+		Keys: ks,
+		Live: live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),

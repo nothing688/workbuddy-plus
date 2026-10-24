@@ -85,6 +85,9 @@ type Config struct {
 	// 面板据它在限流提示里标注「已路由至 X」—— 否则用户看到「v4.1 限流」
 	// 会以为服务断了，实际请求已被自动改道到等价模型继续服务。
 	ModelFallback func() map[string]string
+
+	// UpstreamSync 面板「一键同步上游」配置（见 upstream.go）。零值 = 未启用。
+	UpstreamSync UpstreamSyncConfig
 }
 
 // Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
@@ -120,6 +123,10 @@ type Panel struct {
 	// notifier 排程轮次结束后的汇总通知出口（main 装配期注入 alerting webhook；
 	// nil = 只落面板日志）。装配期设定、运行期只读，不需要锁。
 	notifier func(string)
+
+	// syncState 「一键同步上游」的单飞锁与最近一次结果（upstream.go）。
+	// 值类型：零值即可用（未跑过 = running=false），无需在 New 里初始化。
+	syncState upstreamSyncState
 }
 
 // SetGrowthConcurrency 设置排程轮次的账号间并发（1-4；<=0 视为默认 1）。面板保存配置时热改。
@@ -253,6 +260,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
+	// 一键同步上游：POST 触发（立即 202，后台跑），GET 轮询状态。
+	p.mux.HandleFunc("POST /panel/api/upstream/sync", p.withAuth(p.upstreamSyncStart))
+	p.mux.HandleFunc("GET /panel/api/upstream/status", p.withAuth(p.upstreamSyncStatusHandler))
 }
 
 // ServeHTTP 统一入口：先写安全响应头再分发，保证页面、静态资源、API

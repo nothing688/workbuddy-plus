@@ -8,7 +8,19 @@
     "read_timeout": "300s"
   },
   "panel": {
-    "package_detail_limit": 5
+    "package_detail_limit": 5,
+    "upstream_sync": {
+      "enabled": false,
+      "mode": "cnb",
+      "repo": "",
+      "event": "api_trigger_sync_upstream",
+      "branch": "main",
+      "api_base": "https://api.cnb.cool",
+      "token": "",
+      "workdir": ".",
+      "command": "bash scripts/sync_upstream.sh --auto",
+      "timeout": "10m"
+    }
   },
   "logging": {
     "request_archive_enabled": true,

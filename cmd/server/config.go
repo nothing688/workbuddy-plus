@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/autoroute"
+	"github.com/misakano7545/workbuddy2api-panel/internal/panel"
 	"github.com/misakano7545/workbuddy2api-panel/internal/prompt"
 	"github.com/misakano7545/workbuddy2api-panel/internal/safefile"
 )
@@ -38,6 +39,10 @@ type Config struct {
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
 		PackageDetailLimit int `json:"package_detail_limit"`
+		// UpstreamSync 面板「一键同步上游」。cnb 模式触发仓库构建（容器部署，
+		// 无 git/源码树）；local 模式在源码检出里直接跑同步脚本。字段定义与
+		// 面板共用 panel.UpstreamSyncConfig，避免两处 JSON 名漂移。
+		UpstreamSync panel.UpstreamSyncConfig `json:"upstream_sync"`
 	} `json:"panel"`
 
 	Logging struct {
@@ -420,6 +425,17 @@ func Default() *Config {
 	c.Cooldown.SoftRateMax = "2h"
 	c.Server.ReadTimeout = "300s"
 	c.Panel.PackageDetailLimit = 5
+	// 一键同步上游：默认关闭；cnb 模式的 event/branch/api_base 与 local 模式的
+	// workdir/command 都给推荐值，用户只需打开开关并配 repo + token。
+	c.Panel.UpstreamSync = panel.UpstreamSyncConfig{
+		Mode:    "cnb",
+		Event:   "api_trigger_sync_upstream",
+		Branch:  "main",
+		APIBase: "https://api.cnb.cool",
+		Workdir: ".",
+		Command: "bash scripts/sync_upstream.sh --auto",
+		Timeout: "10m",
+	}
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
@@ -820,6 +836,9 @@ func (c *Config) normalize() error {
 	if c.Panel.PackageDetailLimit <= 0 {
 		c.Panel.PackageDetailLimit = 5
 	}
+	if err := c.normalizeUpstreamSync(); err != nil {
+		return err
+	}
 	if c.Logging.RequestRetentionDays <= 0 {
 		c.Logging.RequestRetentionDays = 7
 	}
@@ -1073,6 +1092,55 @@ func (c *Config) validateAutoModel() error {
 	night := strings.TrimSpace(c.AutoModel.NightPrimary)
 	if day == "" && night == "" && len(c.AutoModel.Fallback) == 0 {
 		return fmt.Errorf("auto_model.enabled=true 但 day_primary / night_primary / fallback 全为空：至少需要给一个候选模型（如 \"cn:hy3\"）")
+	}
+	return nil
+}
+
+// normalizeUpstreamSync 归一「一键同步上游」配置。
+//
+// 只在 enabled 时严格校验（模式/时长写错直接 fail fast）：未启用时用户留下的
+// 半截配置不该阻塞启动（与 auto_model 的口径一致）。token 空 = 运行期回退
+// 环境变量 CNB_TOKEN，不在配置里补写（避免把环境里的明文写进 config.json）。
+func (c *Config) normalizeUpstreamSync() error {
+	u := &c.Panel.UpstreamSync
+	u.Mode = strings.ToLower(strings.TrimSpace(u.Mode))
+	if u.Mode == "" {
+		u.Mode = "cnb"
+	}
+	switch u.Mode {
+	case "cnb", "local":
+	default:
+		if u.Enabled {
+			return fmt.Errorf("panel.upstream_sync.mode: %q 不是合法值（cnb / local）", c.Panel.UpstreamSync.Mode)
+		}
+		u.Mode = "cnb"
+	}
+	if strings.TrimSpace(u.Event) == "" {
+		u.Event = "api_trigger_sync_upstream"
+	}
+	if strings.TrimSpace(u.Branch) == "" {
+		u.Branch = "main"
+	}
+	if strings.TrimSpace(u.APIBase) == "" {
+		u.APIBase = "https://api.cnb.cool"
+	}
+	if strings.TrimSpace(u.Workdir) == "" {
+		u.Workdir = "."
+	}
+	if strings.TrimSpace(u.Command) == "" {
+		u.Command = "bash scripts/sync_upstream.sh --auto"
+	}
+	if strings.TrimSpace(u.Timeout) == "" {
+		u.Timeout = "10m"
+	}
+	if d, err := time.ParseDuration(u.Timeout); err != nil || d <= 0 {
+		if u.Enabled {
+			return fmt.Errorf("panel.upstream_sync.timeout: %q 不是合法正时长（如 10m）", u.Timeout)
+		}
+		u.Timeout = "10m"
+	}
+	if u.Enabled && u.Mode == "cnb" && strings.TrimSpace(u.Repo) == "" {
+		return fmt.Errorf("panel.upstream_sync.enabled=true 且 mode=cnb 但 repo 为空（需要 organization/repo）")
 	}
 	return nil
 }

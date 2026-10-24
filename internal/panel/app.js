@@ -9,6 +9,8 @@ let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
+/* 上游同步：轮询定时器（只用 setTimeout 递归，避免 setInterval 泄漏）。 */
+let upTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
 /* 收纳行（「其余 N 个账号，展开」）的展开状态。必须存在 DOM 之外：账号池/任务中心视图
@@ -427,15 +429,18 @@ $('btnLogout').onclick = () => {
 };
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志', keys: 'API 密钥' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', maint: '维护', logs: '运行日志', keys: 'API 密钥' };
 function go(v) {
   navSet(false);
+  // 离开维护页即停轮询：切走后后台不该继续打状态接口。
+  if (v !== 'maint') upStopPoll();
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
+  if (v === 'maint') loadMaint();
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
@@ -4890,4 +4895,114 @@ $('btnKIssuedCopy').onclick = () => {
   if (navigator.clipboard) navigator.clipboard.writeText(el.value).catch(() => {});
   $('btnKIssuedCopy').textContent = '已复制';
   setTimeout(() => $('btnKIssuedCopy').textContent = '复制', 1500);
+};
+
+/* ── 维护 · 上游同步 ───────────────────────────────────────────────── */
+/* 后端契约：POST upstream/sync（202 started / 409 已在跑 / 400 未启用）；
+   GET upstream/status 给 enabled/mode/running/started_at/finished_at/ok/output/sn/build_url/error。 */
+const UP_MODE_TEXT = {
+  cnb: '触发 CNB 流水线：由构建环境执行合并、刷新基线并测试，结果可在下方构建日志查看。',
+  local: '在当前机器执行同步脚本（scripts/sync_upstream.sh）：合并、刷新基线并测试，输出直接回传。',
+};
+
+function upStopPoll() {
+  if (upTimer) { clearTimeout(upTimer); upTimer = null; }
+}
+
+function upTime(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return String(s);
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+    ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function upBuildHtml(st) {
+  if (st.sn == null || st.sn === '') return '构建号 —';
+  const sn = esc(String(st.sn));
+  const url = st.build_url && /^https?:\/\//i.test(st.build_url) ? st.build_url : '';
+  return '构建号 ' + (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + sn + '</a>' : sn);
+}
+
+function renderUpstream(st) {
+  const en = !!st.enabled, run = !!st.running;
+  const btn = $('btnUpstreamSync');
+  btn.disabled = !en || run;
+  btn.textContent = run ? '同步中…' : '立即同步';
+
+  $('upMode').textContent = en
+    ? (st.mode === 'local' ? '当前模式：本机执行（local）' : '当前模式：CNB 流水线（cnb）')
+    : '上游同步未启用';
+  $('upDesc').textContent = en
+    ? (UP_MODE_TEXT[st.mode] || UP_MODE_TEXT.cnb)
+    : '上游同步未启用（后端未配置触发方式），无法从这里发起同步；请先在部署配置中启用。';
+
+  const tag = $('upState');
+  if (run) { tag.textContent = '运行中'; tag.className = 'tag warn'; }
+  else if (st.finished_at && st.ok) { tag.textContent = '成功'; tag.className = 'tag ok'; }
+  else if (st.finished_at) { tag.textContent = '失败'; tag.className = 'tag bad'; }
+  else { tag.textContent = '空闲'; tag.className = 'tag mute'; }
+
+  $('upStartedAt').textContent = '开始时间 ' + (st.started_at ? upTime(st.started_at) : '—');
+  $('upBuild').innerHTML = upBuildHtml(st);
+
+  const out = $('upOut');
+  const bad = !!st.finished_at && !st.ok;
+  let text = st.output || '';
+  if (st.error && text.indexOf(st.error) < 0) text = text ? text + '\n' + st.error : st.error;
+  out.textContent = text;
+  out.classList.toggle('bad', bad);
+}
+
+async function upPoll() {
+  upTimer = null;
+  if (view !== 'maint') return;
+  try {
+    const st = await api('upstream/status');
+    if (view !== 'maint') return;   // 请求期间切走了：不再写界面、不再续期
+    renderUpstream(st);
+    if (st.running) upSchedule(2000);
+  } catch (e) {
+    const out = $('upOut');
+    out.textContent = '状态读取失败：' + (e.message || e);
+    out.classList.add('bad');
+    $('btnUpstreamSync').disabled = true;
+  }
+}
+
+/* 只用 setTimeout 递归：每次轮询前先清掉旧定时器，避免切页/重复点击叠加。 */
+function upSchedule(ms) {
+  upStopPoll();
+  upTimer = setTimeout(upPoll, ms);
+}
+
+/* 进入维护页：只拉一次状态，绝不自动触发同步。 */
+async function loadMaint() {
+  upStopPoll();
+  try {
+    const st = await api('upstream/status');
+    renderUpstream(st);
+    if (st.running) upSchedule(2000);
+  } catch (e) {
+    const out = $('upOut');
+    out.textContent = '状态读取失败：' + (e.message || e);
+    out.classList.add('bad');
+    $('btnUpstreamSync').disabled = true;
+  }
+}
+
+$('btnUpstreamSync').onclick = async () => {
+  const btn = $('btnUpstreamSync');
+  btn.disabled = true;
+  btn.textContent = '同步中…';
+  try {
+    await api('upstream/sync', { method: 'POST' });
+    toast('上游同步已触发', 'ok');
+  } catch (e) {
+    // 409 = 已在跑，继续跟踪；400 = 未启用，状态刷新后会禁用按钮。
+    if (e.status === 409) toast('同步已在运行，继续跟踪进度', 'ok');
+    else toast('触发失败：' + (e.message || e), 'err');
+  }
+  if (view === 'maint') upSchedule(0);
 };
