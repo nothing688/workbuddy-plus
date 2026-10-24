@@ -185,6 +185,11 @@ var autoActions = []autoAction{
 		run:      runBlackCat,
 	},
 	{
+		TaskCode: "school_season",
+		Desc:     "校园日（小程序口径）：accept → mini 对话+activityId 上报 → 领奖（+100c+5e）",
+		run:      runSchoolSeason,
+	},
+	{
 		TaskCode: "Sequential_Tasks_1",
 		Desc:     "小程序首对话（小程序口径）：accept → mini 对话上报 → 领奖（+100c+5e）",
 		run:      runSequentialChat,
@@ -263,6 +268,7 @@ func autoActionIndex(code string) int {
 // mpTaskCodes 小程序口径专属下发的成长任务：默认（无 mp 头）列表不出现，
 // accept/claim 均要求 X-Client-Platform: miniprogram。新任务出现时在此登记。
 var mpTaskCodes = map[string]bool{
+	"school_season":      true, // 校园日（mini chat + activityId）
 	"Sequential_Tasks_1": true, // 小程序首对话（mini chat，无 activityId）
 	"Sequential_Tasks_2": true, // 小程序选中专家并完成有效对话（mp 指纹 expert_actual_use）
 	"Sequential_Tasks_3": true, // 小程序完成 5 次对话（与 Tasks_1 同形状，target=5 逐条累加）
@@ -405,8 +411,10 @@ func mpChatTarget(code string, reported int64) int64 {
 }
 
 // runMPMiniChatTask growth 域小程序限定任务通用闭环：
-// mp 查询 → accept（带登记回读验证）→ mini chat 事件上报 → 回读 → 达标即领奖。
-func (p *Panel) runMPMiniChatTask(a *auth.Auth, code string) (string, error) {
+// mp 查询 → accept（带登记回读验证）→ mini chat 事件上报（withActivityId 决定
+// 是否带开学季 activityId：school_season 必带，Sequential_Tasks_1 不带——服务端按
+// source=mini_program 指纹关联）→ 回读 → 达标即领奖。
+func (p *Panel) runMPMiniChatTask(a *auth.Auth, code string, withActivityId bool) (string, error) {
 	t, err := p.taskByCodeMP(a, code)
 	if err != nil {
 		return "", err
@@ -443,7 +451,13 @@ func (p *Panel) runMPMiniChatTask(a *auth.Auth, code string) (string, error) {
 	for i := int64(0); i < need; i++ {
 		time.Sleep(mpChatEventGap + time.Duration(rand.Int64N(int64(10*time.Second))))
 		conv := session.NewConversationID()
-		if err := p.cfg.Upstream.ReportMPEvent(a, upstream.MiniChatSendEvent(conv)); err != nil {
+		var ev map[string]any
+		if withActivityId {
+			ev = upstream.SchoolSeasonChatEvent(conv)
+		} else {
+			ev = upstream.MiniChatSendEvent(conv)
+		}
+		if err := p.cfg.Upstream.ReportMPEvent(a, ev); err != nil {
 			return "", fmt.Errorf("完成 %d/%d 次上报后中断: %w", i, need, err)
 		}
 	}
@@ -472,11 +486,18 @@ func (p *Panel) runMPMiniChatTask(a *auth.Auth, code string) (string, error) {
 	return fmt.Sprintf("任务点亮并领取奖励（+%dc +%de）", credit, energy), nil
 }
 
+// runSchoolSeason 完成 school_season「校园日」（growth 域小程序限定）。
+// 判据 = mini chat_request_send + activityId=school_open_day_2026（无 activityId
+// 不点亮，与 school 域开学季同活动关联；上游 task_runner e2e 实测 +100c+5e）。
+func runSchoolSeason(p *Panel, a *auth.Auth) (string, error) {
+	return p.runMPMiniChatTask(a, "school_season", true)
+}
+
 // runSequentialChat 完成 Sequential_Tasks_1「小程序内完成 1 次有效对话」。
 // 判据 = mini chat_request_send（无 activityId，服务端按 source=mini_program
 // 指纹关联；上游 task_runner 实测 +100c+5e）。
 func runSequentialChat(p *Panel, a *auth.Auth) (string, error) {
-	return p.runMPMiniChatTask(a, "Sequential_Tasks_1")
+	return p.runMPMiniChatTask(a, "Sequential_Tasks_1", false)
 }
 
 // runSequentialChat5 完成 Sequential_Tasks_3「在小程序内完成 5 次有效对话」。
@@ -486,7 +507,7 @@ func runSequentialChat(p *Panel, a *auth.Auth) (string, error) {
 // （2026-09-26 实测：45s 间隔补满 5/5 → claim +300c+5e 成功，领后 accept_status
 // =claimed 稳定不回滚）。
 func runSequentialChat5(p *Panel, a *auth.Auth) (string, error) {
-	return p.runMPMiniChatTask(a, "Sequential_Tasks_3")
+	return p.runMPMiniChatTask(a, "Sequential_Tasks_3", false)
 }
 
 // runSequentialChat10 完成 Sequential_Tasks_6「在小程序内完成 10 次有效对话」（预留）。
@@ -494,7 +515,7 @@ func runSequentialChat5(p *Panel, a *auth.Auth) (string, error) {
 // runMPMiniChatTask 按差额补报——issue #42 称 target=10，以解锁后实际下发为准。
 // 真人节奏间隔同样适用（mpChatEventGap）：9 条 × ~50s ≈ 8 分钟/账号，夜间队列可接受。
 func runSequentialChat10(p *Panel, a *auth.Auth) (string, error) {
-	return p.runMPMiniChatTask(a, "Sequential_Tasks_6")
+	return p.runMPMiniChatTask(a, "Sequential_Tasks_6", false)
 }
 
 // runSequentialEventTask Sequential 链预留任务通用骨架：mp 查询 → accept（带验证）

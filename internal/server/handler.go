@@ -10,7 +10,9 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -19,6 +21,7 @@ import (
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/apikeys"
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/autoroute"
 	"github.com/misakano7545/workbuddy2api-panel/internal/httpauth"
 	"github.com/misakano7545/workbuddy2api-panel/internal/livecfg"
 	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
@@ -46,9 +49,10 @@ type Config struct {
 	RefreshSkew  time.Duration // token 提前刷新窗口，默认 10m
 
 	// ModelFallback 模型降级路由表（pool.model_fallback）：key = 请求模型（裸名或带域
-	// 前缀均可），value = 6004 限流时改用的等价模型。空/nil = 不降级（老行为）。
-	// 只对 6004 模型级限流生效；降级不写持久状态，冷却到期自动回原模型。
-	ModelFallback func() map[string]string
+	// 前缀均可），value = 6004 限流时改用的等价模型候选链（有序）。空/nil = 不降级
+	// （老行为）。只对 6004 模型级限流生效；降级不写持久状态，冷却到期自动回原模型。
+	// 6004 单跳消费点只取链首等价模型；完整链展开由 autoroute.Chain 负责。
+	ModelFallback func() map[string][]string
 
 	// Panel 管理面板 handler（可选；nil = 不挂载）。挂载在 /panel/ 前缀下，
 	// 面板自带 Bearer 鉴权（同一 api_key）与内嵌静态资源，主路由只做转发。
@@ -644,6 +648,49 @@ func (h *Handler) modelList() []map[string]any {
 	// 出图模型（目录里被 tag 剔掉的 text-to-image / image-to-image）：对话列表照旧不含它们，
 	// 这里以 image_generation=true 单列——客户端据此发现可用的出图模型名，不会误发对话。
 	out = append(out, h.generationModelEntries()...)
+	// auto 虚拟模型（模型编排）：启用时才列出，条目形态与真实模型一致（id/object/
+	// created/owned_by + 说明性 name/description）。客户端选中后网关按昼夜时段挑
+	// 主模型并在失败时按降级链重试，故 description 里点明编排语义。
+	if auto := h.loadLive().Auto; auto.Enabled {
+		// 同名让位：虚拟模型名若已作为真实模型列出（上游自带），默认不再追加
+		// 虚拟条目（Override=true 才覆盖），避免列表里出现两个同 id 条目。
+		listed := make(map[string]bool, len(out))
+		for _, e := range out {
+			if id, _ := e["id"].(string); id != "" {
+				listed[id] = true
+			}
+		}
+		// Override=true（明确要求接管同名模型）：先从列表里摘掉上游同名条目，
+		// 保证列表中不存在两个同 id 条目（否则客户端选择列表会出现重复项）。
+		vids := auto.VirtualIDs()
+		if auto.Override && len(vids) > 0 {
+			vset := make(map[string]bool, len(vids))
+			for _, v := range vids {
+				vset[v] = true
+			}
+			kept := make([]map[string]any, 0, len(out))
+			for _, e := range out {
+				if id, _ := e["id"].(string); vset[id] {
+					continue
+				}
+				kept = append(kept, e)
+			}
+			out = kept
+		}
+		for _, id := range vids {
+			if listed[id] && !auto.Override {
+				continue
+			}
+			out = append(out, map[string]any{
+				"id":          id,
+				"object":      "model",
+				"created":     1753600000,
+				"owned_by":    "workbuddy",
+				"name":        "auto",
+				"description": "虚拟模型：按昼夜时段选主模型，失败时按降级链自动切换（网关侧编排）",
+			})
+		}
+	}
 	return out
 }
 
@@ -839,7 +886,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	autoCfg := h.loadLive().Auto
 	// 同名让位：上游本身可能下发了叫 auto 的真实模型，默认不劫持（Override=true
 	// 才接管）。判据取自本地模型缓存，不触发探测。
-	chain := autoCfg.Chain(routeModel, hourCST(), h.realModelExists(routeModel))
+	chain := autoCfg.Chain(routeModel, hourCST, h.realModelExists(routeModel))
 	ci := 0
 	if chain[0] != routeModel {
 		log.Printf("auto-route: %s → 候选链 %v", routeModel, chain)
@@ -860,6 +907,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 与 tried（按账号去重）正交：降级是「同账号换模型」，故需独立追踪。
 	fallbackTried := map[string]bool{}
 	// fallbackTo 返回 curModel 的等价模型（未配置 / 已试过 / 自指 → 空）。
+	// 链式表（键 → 有序候选链）：完整链展开由 autoroute.Chain 负责，此处保留
+	// panel 的同账号 6004 改道语义，取链首等价模型（首个等价模型）。
 	fallbackTo := func() string {
 		if h.cfg.ModelFallback == nil {
 			return ""
@@ -868,7 +917,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if m == nil {
 			return ""
 		}
-		to := m[curModel]
+		chain := m[curModel]
+		if len(chain) == 0 {
+			return ""
+		}
+		to := strings.TrimSpace(chain[0])
 		if to == "" || to == curModel || fallbackTried[to] {
 			return ""
 		}
@@ -1171,7 +1224,37 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
 
-	for i := 0; i < h.cfg.MaxRotate; i++ {
+	// 轮转预算：每个候选模型各享 MaxRotate 次换号额度（模型降级不是换号，不占用同一
+	// 模型的额度）；总上限兜底，防长链把单请求放大成风暴（32 次已是极端值）。
+	maxAttempts := h.cfg.MaxRotate * len(chain)
+	if maxAttempts > 32 {
+		maxAttempts = 32
+	}
+	perModel := 0
+	// advance 切到下一个候选模型：重算 realm/bareModel/curModel、重写出站 body 的
+	// model 名、清空已试账号与等价降级记录（换模型后账号可用性判据完全不同）。
+	// 无更多候选时返回 false（调用方据此走既有末端错误透传）。
+	advance := func() bool {
+		if ci+1 >= len(chain) {
+			return false
+		}
+		ci++
+		realm, bareModel = resolveModel(chain[ci])
+		curModel = bareModel
+		body = rewriteModel(body, bareModel)
+		tried = map[string]bool{}
+		fallbackTried = map[string]bool{}
+		perModel = 0
+		log.Printf("auto-route: %s → 降级候选 %d/%d：%s", chain[ci-1], ci+1, len(chain), chain[ci])
+		return true
+	}
+
+	for i := 0; i < maxAttempts; i++ {
+		// 本候选模型的换号额度用尽且还有候选 → 换模型（继续换号已无意义）。
+		if perModel >= h.cfg.MaxRotate && advance() {
+			continue
+		}
+		perModel++
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
 		if stickyUID != "" {
@@ -1198,6 +1281,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				if applyFallback(to) {
 					continue
 				}
+			}
+			// 模型编排降级：该模型在池里已无可用账号（全冷却/全限额/全熔断）：
+			// 换号已穷尽，有候选链就降级换模型（类别 no_healthy_account 默认可降级）。
+			if autoCfg.Fallbackable(autoroute.NoHealthyAccount) && advance() {
+				continue
 			}
 			// issue #46：全池该模型只是被 14003「模型繁忙」的短冷却挡住时，先等它的
 			// 最早解封（上限 busyWaitCap）再试，而不是把几秒的抖动直接变成客户端
@@ -1286,6 +1374,26 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			status = uerr.Status
 		}
 		if uerr == nil && terr != nil {
+			// 上游超时 / 停滞：**不换号、不罚号**。
+			//
+			// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
+			// 只会把客户端拖到 maxAttempts × header_timeout，期间还给一串健康号
+			// 喂连败计数。此前全仓没有任何超时识别，超时和"网络抖动"共用同一条
+			// 换号路径。
+			//
+			// 判定三态：net.Error.Timeout()（ResponseHeaderTimeout / Client.Timeout）、
+			// 显式 deadline（DeadlineExceeded / os.ErrDeadlineExceeded）、以及
+			// **客户端仍在但 ctx 被取消**——那只能是我们自己的空闲看门狗掐的流，
+			// 也就是上游停滞。客户端主动断连时 r.Context() 已取消，走下面的断连
+			// 分支（移植自 plus 的传输层止损）。
+			if isUpstreamTimeout(terr, r.Context().Err() != nil) {
+				recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+				st.status = http.StatusServiceUnavailable
+				lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
+				log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
+					logfmt.Label(acct.UID, acct.Nickname), terr)
+				break
+			}
 			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
 			// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
 			// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
@@ -1488,6 +1596,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if kind == upstream.ErrWafBlock && h.wafIP.noteWaf(acct.UID) {
 				break
 			}
+			// 模型级降级：限流/额度耗尽/该后端无此模型/上游故障等「换号解决不了」
+			// 的错误 → 切下一个候选模型。账号已在上方照常记账（冷却/熔断），
+			// 降级不豁免账号罚则，只是把请求引到另一个模型上。
+			if autoCfg.Fallbackable(kind.String()) && advance() {
+				continue
+			}
 			if !rotateBackoff(i, r.Context()) {
 				break // ctx 取消：终止轮转（分类错误换号退避）
 			}
@@ -1503,6 +1617,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 若 sticky 号失败、轮换到别的号成功，这里把会话重绑到新号，多轮对话下一跳不再随机抽。
 		if sessKey != "" && h.cfg.Session != nil {
 			h.cfg.Session.Bind(sessKey, acct.UID)
+		}
+		// 编排生效（出站模型 ≠ 客户端写的模型名）时透出实际模型：便于客户端/运维
+		// 确认 auto 落在哪个模型上、降级是否发生过。不改响应体语义。
+		if chain[ci] != peek.Model {
+			w.Header().Set("X-WB2A-Routed-Model", chain[ci])
 		}
 		if peek.Stream {
 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
@@ -1622,6 +1741,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if hasCredit {
 				st.credit, st.hasCredit = credit, true
 				h.cfg.Pool.NoteModelCost(acct.UID, bareModel, credit, total)
+				// 分发密钥记账：credit 即本次真实扣除的积分，tokens 记入 token 额度。
+				if k := keyFrom(r); k != nil && h.cfg.Keys != nil {
+					toks := int64(0)
+					if hasTotal && total > 0 {
+						toks = int64(total)
+					}
+					h.cfg.Keys.Consume(k.ID, credit, toks)
+				}
 			}
 			rc.Close()
 			return
@@ -1682,6 +1809,28 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if modelEcho != "" {
 			resp["model"] = modelEcho
 		}
+		// 空回复降级（config.auto_model.on_empty，默认开）：上游 200 但正文为空
+		// ——部分模型默认 reasoning_effort=max，思考 token 吃满 max_tokens 预算，
+		// 返回 200 + 空 content 且不报错。此时响应尚未写回客户端，可直接换下一个
+		// 候选模型重来；无候选时照常返回（零回归）。
+		if autoCfg.OnEmpty && isEmptyCompletion(resp) {
+			log.Printf("WARN: [server] empty completion acct=%s model=%s -> auto-route fallback",
+				logfmt.Label(acct.UID, acct.Nickname), bareModel)
+			// 空回复也是一次真实消耗（思考 token 已烧掉）：降级前先把本次积分/
+			// token 记到密钥账上，否则换模型重试等于白嫖一次上游消耗。
+			if k := keyFrom(r); k != nil && h.cfg.Keys != nil && hasCredit {
+				h.cfg.Keys.Consume(k.ID, credit, int64(total))
+			}
+			if advance() {
+				// 空回复不是账号故障：不罚号、不解绑粘性号（换模型后该号仍可能可用）。
+				// 但本次尝试占用的在途租约必须归还，否则重试期间该账号仍占着名额。
+				releaseHeld()
+				// 换模型后优先换一个号重试：同一账号紧接着的第二次请求在上游侧明显
+				// 更慢且更易失败；池里没有别的号时 Pick 会忽略 tried 回落到同号。
+				tried[acct.UID] = true
+				continue
+			}
+		}
 		writeJSON(w, http.StatusOK, resp)
 		st.status = http.StatusOK
 		st.outcome = reqlog.OutcomeSuccess
@@ -1698,6 +1847,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if hasCredit {
 			st.credit, st.hasCredit = credit, true
 			h.cfg.Pool.NoteModelCost(acct.UID, bareModel, credit, total)
+			// 分发密钥记账：credit 即本次真实扣除的积分，tokens 记入 token 额度。
+			if k := keyFrom(r); k != nil && h.cfg.Keys != nil {
+				h.cfg.Keys.Consume(k.ID, credit, int64(total))
+			}
 		}
 		return
 	}
@@ -1710,6 +1863,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusServiceUnavailable
 	code := "no_healthy_account"
 	msg := "all accounts are temporarily unavailable, please retry later"
+	// 上游超时：轮转已在传输层分支止损（见 isUpstreamTimeout），这里给一条**能区分**
+	// 的文案，别混进"没有可用账号"——两者的排查方向完全不同（传输层超时路径的
+	// lastErr 链上无 *upstream.Error，下方 errors.As 分支不会覆盖本条）。
+	if errors.Is(lastErr, errUpstreamTimeout) {
+		code = "upstream_timeout"
+		msg = "upstream timed out: rotation stopped (another account would hit the same slow upstream), please retry later"
+	}
 	// quota：积分耗尽专用形态（429 + type/code 同为 insufficient_quota，OpenAI
 	// 自己的 quota 错误口径；客户端据此不重试）。
 	quota := false
@@ -1978,6 +2138,26 @@ func rotateBackoff(i int, ctx context.Context) bool {
 		return false
 	}
 	return true
+}
+
+// errUpstreamTimeout 上游超时的哨兵：末端出口据此给出与「没号可用」可区分的文案。
+var errUpstreamTimeout = errors.New("upstream timeout")
+
+// isUpstreamTimeout 判断这一跳的失败是否属于「上游超时 / 停滞」。超时不是账号的
+// 问题，换号注定白换（同一份请求撞同一个慢上游），必须止损：不轮转、不罚号。
+// 三态判定见传输层错误分支的注释。
+func isUpstreamTimeout(err error, clientGone bool) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	return !clientGone && errors.Is(err, context.Canceled)
 }
 
 // applyErrorPolicy 按错误分类对账号施加冷却/禁用/熔断策略（最终版状态机）。

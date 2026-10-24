@@ -85,10 +85,21 @@ func (m *modelAwareUpstream) seen() []string {
 func newFallbackHandler(fb map[string]string, up *upstream.Client) *Handler {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at-u1", ExpiresAt: 9999999999})
 	return NewHandler(Config{
-		Pool:          p,
-		Upstream:      up,
-		MaxRotate:     3,
-		ModelFallback: func() map[string]string { return fb },
+		Pool:      p,
+		Upstream:  up,
+		MaxRotate: 3,
+		// ModelFallback 已统一为链式表（键 → 有序候选链）：旧单跳测试用例按
+		// 「键 → 单元素链」适配；6004 单跳改道消费的是链首等价模型。
+		ModelFallback: func() map[string][]string {
+			if fb == nil {
+				return nil
+			}
+			out := make(map[string][]string, len(fb))
+			for k, v := range fb {
+				out[k] = []string{v}
+			}
+			return out
+		},
 	})
 }
 

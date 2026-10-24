@@ -105,6 +105,23 @@
     "ttl": "30m",
     "gc_interval": "5m"
   },
+  "trust_proxy": false,
+  "auto_model": {
+    "enabled": false,
+    "day_primary": "cn:hy3",
+    "night_primary": "cn:hy4-preview",
+    "day_start": 8,
+    "day_end": 23,
+    "fallback": [
+      "cn:hy3",
+      "cn:deepseek-v4.1-flash",
+      "cn:glm-5.3-flash"
+    ],
+    "virtual_id": "auto",
+    "override": true,
+    "on_empty": true,
+    "fallback_on": null
+  },
   "admin": {
     "enabled": false,
     "audit_enabled": false,

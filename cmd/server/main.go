@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/alert"
+	"github.com/misakano7545/workbuddy2api-panel/internal/apikeys"
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
 	"github.com/misakano7545/workbuddy2api-panel/internal/balance"
 	"github.com/misakano7545/workbuddy2api-panel/internal/credithist"
@@ -53,6 +54,25 @@ func stateSibling(stateFile, name string) string {
 		return name
 	}
 	return filepath.Join(dir, name)
+}
+
+// fallbackHeads 把链式降级表（键 → 有序候选链）压回「键 → 链首」的单跳形态。
+// 只服务 panel.Config.ModelFallback 的旧单跳接口（面板仅做展示标注，不消费链）；
+// 网关侧 6004 改道同样只取链首，完整链展开由 autoroute.Chain 负责。
+func fallbackHeads(m map[string][]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if len(v) > 0 && v[0] != "" {
+			out[k] = v[0]
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func main() {
@@ -309,8 +329,11 @@ func main() {
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(cfg.Models.Hidden),
 		ModelAliases:         livecfg.NormalizeModelAliases(cfg.Models.Aliases),
-		// 模型降级路由表（pool.model_fallback）：6004 限流时同账号改用等价模型。
+		// 模型降级路由表（pool.model_fallback）：6004 限流时同账号改用等价模型
+		// （链式表，键 → 有序候选链；6004 单跳改道取链首，完整链由编排层展开）。
 		ModelFallback: cfg.Pool.ModelFallback,
+		// 模型编排（auto 虚拟模型 + 降级链）：随面板保存配置热替换。
+		Auto: cfg.Auto(),
 	})
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
@@ -319,6 +342,10 @@ func main() {
 	rec.Start()
 	defer rec.Stop()
 	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
+
+	// 对外分发的子密钥库（data/keys.json，与 state 同目录）。
+	ks := apikeys.New(stateSibling(cfg.StateFile, "keys.json"))
+	ks.TrustProxy = cfg.TrustProxy
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
@@ -355,8 +382,10 @@ func main() {
 		RequestLog: requestLog,
 		Upstream:   up,
 		Scheduler:  sch,
-		// 降级路由表：面板据此在限流提示里标注「已路由至 <等价模型>」。
-		ModelFallback: func() map[string]string { return live.Load().ModelFallback },
+		// 降级路由表：面板据此在限流提示里标注「已路由至 <等价模型>」。面板接口
+		// 仍是单跳形态（map[string]string），此处压成「键 → 链首」适配（面板只做
+		// 展示标注，不消费链）；完整链展开由编排层负责。
+		ModelFallback: func() map[string]string { return fallbackHeads(live.Load().ModelFallback) },
 		// 余额趋势采样记录器：nil 时该视图返回 501。
 		Balance: bal,
 		// 后台任务的自动触发开关与成长任务排程共用热配置（schedule.growth_enabled）。
@@ -366,6 +395,8 @@ func main() {
 		RedisMode:        redisMode,
 		StickyCount:      sessCount,
 		Version:          appVersion,
+		// 对外分发的子密钥库：密钥页读写 / 网关侧校验共用同一 Store。
+		Keys:             ks,
 		Live:             live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
@@ -413,10 +444,12 @@ func main() {
 		Panel:        pn,
 		Live:         live,
 		Usage:        rec,
+		Keys:         ks,
 		RequestLog:   requestLog,
 		PromptMode:   cfg.Prompt.Mode,
 		// 模型降级路由表：读 live 快照（支持面板热更，改完即生效、无需重启）。
-		ModelFallback: func() map[string]string { return live.Load().ModelFallback },
+		// 链式口径（键 → 有序候选链）：6004 单跳改道取链首，完整链由 autoroute.Chain 展开。
+		ModelFallback: func() map[string][]string { return live.Load().ModelFallback },
 		PromptText:    cfg.PromptText,
 		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
 		// 裸用/测试路径拿到同一缺省值。
@@ -697,6 +730,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(newCfg.Models.Hidden),
 		ModelAliases:         livecfg.NormalizeModelAliases(newCfg.Models.Aliases),
+		Auto:                 newCfg.Auto(), // 模型编排热生效（无需重启）
 	})
 	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
 	up.SanitizeBrandScope.Store(newCfg.Features.SanitizeBrandScope)

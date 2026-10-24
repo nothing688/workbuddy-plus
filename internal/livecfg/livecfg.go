@@ -25,9 +25,11 @@ type Snapshot struct {
 	HiddenModels         map[string]struct{} // 精确隐藏的模型 id（已归一化为 "cn:x"/"global:x" 全量形式）；nil = 不隐藏
 	ModelAliases         map[string]string   // 客户端名 → 真实模型名（键已归一化小写；"cn:x"/"global:x" 前缀键只在该域生效，裸名键两域都生效）；nil = 不映射。issue #30
 	// ModelFallback 模型降级路由表（pool.model_fallback）：6004 模型级限流时改用
-	// 的等价模型（裸名 → 裸名）。nil = 不降级。与 aliases 的区别：aliases 是
+	// 的等价模型链（裸名 → 有序候选链）。nil = 不降级。与 aliases 的区别：aliases 是
 	// 「客户端名→真实名」的静态映射，本表是「限流时的临时改道」，且不写持久状态。
-	ModelFallback map[string]string
+	// 链式口径与 autoroute.Config.ModelFallback 一致（键 → 有序候选链）；
+	// 6004 单跳改道只取链首，完整链展开由 autoroute.Chain 负责。
+	ModelFallback map[string][]string
 	// Auto 模型编排配置（auto 虚拟模型 + 降级链，config.auto_model / model_fallback）。
 	// 随面板保存配置热替换；零值 = 编排关闭（零回归）。
 	Auto autoroute.Config

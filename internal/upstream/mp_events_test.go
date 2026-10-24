@@ -37,3 +37,16 @@ func TestMiniChatSendEvent(t *testing.T) {
 		t.Error("agentName missing")
 	}
 }
+
+func TestSchoolSeasonChatEvent(t *testing.T) {
+	ev := SchoolSeasonChatEvent("conv-1")
+	if ev["eventCode"] != "chat_request_send" {
+		t.Errorf("eventCode=%v", ev["eventCode"])
+	}
+	if ev["conversationId"] != "conv-1" || ev["codebuddy.session_id"] != "conv-1" {
+		t.Errorf("conversation join fields missing: %v", ev)
+	}
+	if ev["activityId"] != schoolOpenDayActivityID {
+		t.Errorf("activityId=%v, want %v", ev["activityId"], schoolOpenDayActivityID)
+	}
+}

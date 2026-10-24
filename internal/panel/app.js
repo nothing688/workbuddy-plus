@@ -427,7 +427,7 @@ $('btnLogout').onclick = () => {
 };
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志', keys: 'API 密钥' };
 function go(v) {
   navSet(false);
   view = v;
@@ -440,6 +440,7 @@ function go(v) {
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
   if (v === 'balhist') loadBalance();
+  if (v === 'keys') loadKeys();
   // 补偿状态按需拉取：compData 为空才打上游（失败留空 → 下次进入重试）。
   if (v === 'taskscenter') { reattachQueueView(); if (!compData) loadCompensation(); }
 }
@@ -1366,6 +1367,12 @@ const CFG_MAP = {
   sanitize_blacklist_fingerprints: ['features', 'sanitize_blacklist_fingerprints'],
   sanitize_brand_scope: ['features', 'sanitize_brand_scope'],
   session_sticky_enabled: ['session_sticky', 'enabled'],
+  auto_enabled: ['auto_model', 'enabled'], auto_virtual_id: ['auto_model', 'virtual_id'],
+  auto_override: ['auto_model', 'override'], auto_day_primary: ['auto_model', 'day_primary'],
+  auto_night_primary: ['auto_model', 'night_primary'],
+  auto_day_start: ['auto_model', 'day_start'], auto_day_end: ['auto_model', 'day_end'],
+  auto_fallback: ['auto_model', 'fallback'], auto_on_empty: ['auto_model', 'on_empty'],
+  model_fallback: ['pool', 'model_fallback'],
   request_client_info: ['logging', 'request_client_info'],
   models_hidden: ['models', 'hidden'],
   models_aliases: ['models', 'aliases'],
@@ -1405,6 +1412,7 @@ async function loadConfig() {
       const v = dig(cfgLoaded, path);
       if (el.type === 'checkbox') el.checked = !!v;
       else if (Array.isArray(v)) el.value = v.join(', ');
+      else if (v !== null && typeof v === 'object') el.value = JSON.stringify(v, null, 2);
       else el.value = v == null ? '' : v;
     }
     markDurationFields(); // 回填后重置校验态（清掉残留红框；现值来自后端必然合法）
@@ -1427,6 +1435,14 @@ function collectConfig() {
       if (name === 'models_hidden') v = raw.split(/[,，\s]+/).filter(Boolean);
       // 模型映射（issue #30）："客户端名=真实名" 条目数组，同列表语义；空数组照发 = 清空。
       else if (name === 'models_aliases') v = raw.split(/[,，]+/).map(s => s.trim()).filter(Boolean);
+      // 模型编排降级链（有序数组）：空值必须提交 null（而不是跳过）——后端保存是
+      // 「深合并」语义，跳过=保留旧值，只有显式 null 才能真正清空降级链。
+      else if (name === 'auto_fallback') {
+        const arr = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        v = arr.length ? arr : null;
+      }
+      // 具名模型降级表（map[string][]string）：JSON 对象，同上空值显式 null 清空。
+      else if (name === 'model_fallback') v = raw === '' ? null : JSON.parse(raw);
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
       else if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
@@ -1462,6 +1478,7 @@ function markDurationFields() {
 }
 $('cfgForm').addEventListener('input', ev => {
   if (DURATION_FIELDS.includes(ev.target.name)) markDurationFields();
+  if (ev.target.name === 'model_fallback') markJSONFields();
 });
 $('btnEye').onclick = () => {
   const el = $('cfgKey');
@@ -1472,13 +1489,15 @@ $('btnEye').onclick = () => {
 $('btnCfgReload').onclick = loadConfig;
 $('cfgForm').onsubmit = async ev => {
   ev.preventDefault();
-  // 时长字段脏值拦截：标红 + toast 点名，不发保存请求（后端同样会拒，这里前置）。
+  // 时长 / JSON 字段脏值拦截：标红 + toast 点名，不发保存请求（后端同样会拒，这里前置）。
   markDurationFields();
-  const firstBad = DURATION_FIELDS.find(durationBad);
+  markJSONFields();
+  const firstBad = DURATION_FIELDS.find(durationBad) || JSON_FIELDS.find(jsonBad);
   if (firstBad) {
     const el = $('cfgForm').elements[firstBad];
     el.focus();
-    toast('「' + (el.closest('.fld')?.querySelector('.lb')?.textContent || firstBad) + '」' + DURATION_TIP, 'err');
+    toast('「' + (el.closest('.fld')?.querySelector('.lb')?.textContent || firstBad) + '」' +
+      (jsonBad(firstBad) ? JSON_TIP : DURATION_TIP), 'err');
     return;
   }
   const btn = $('btnCfgSave');
@@ -1498,6 +1517,36 @@ $('cfgForm').onsubmit = async ev => {
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
   finally { btn.disabled = false; btn.textContent = '保存配置'; }
 };
+
+/* 具名模型降级表（pool.model_fallback）：必须是 JSON 对象（键=客户端模型名，
+   值=候选模型数组）。脏值就地标红 + 保存时拦截，避免把坏 JSON 提交给后端
+   （后端 normalize 会拒，但前端先挡一次体验更好）。
+   jsonBad / markJSONFields 对无表单桩的环境（回归测试切片）直接跳过。 */
+const JSON_FIELDS = ['model_fallback'];
+const JSON_TIP = '应为 JSON 对象，例如 {"cn:deep-model": ["cn:fast-model"]}';
+function jsonBad(name) {
+  const f = $('cfgForm');
+  if (!f || !f.elements) return false;
+  const el = f.elements[name];
+  if (!el) return false;
+  const v = el.value.trim();
+  if (v === '') return false;
+  try {
+    const o = JSON.parse(v);
+    return o === null || typeof o !== 'object' || Array.isArray(o);
+  } catch (e) { return true; }
+}
+function markJSONFields() {
+  const f = $('cfgForm');
+  if (!f || !f.elements) return;
+  for (const name of JSON_FIELDS) {
+    const el = f.elements[name];
+    if (!el) continue;
+    const bad = jsonBad(name);
+    el.classList.toggle('invalid', bad);
+    el.title = bad ? JSON_TIP : '';
+  }
+}
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
 function openAdd() {
@@ -1772,6 +1821,7 @@ const AUTO_TASKS = {
   'expert_use_shangjia_xuanchuan': '「商家宣传页与海报设计师」召唤+使用链（专家页搜索口径，截止 11-20，+50 分）',
   'expert_use_bowangwang': '「直播电商教练」召唤+使用链（专家页搜索口径，截止 11-20，+50 分）',
   'skill_1': '真实对话 + skill_info 技能加载事件（实测点亮）',
+  'school_season': '校园日（小程序口径）：accept → mini 对话+activityId 上报 → 领奖（+100c+5e）',
   'Sequential_Tasks_1': '小程序首对话（小程序口径）：accept → mini 对话上报 → 领奖（+100c+5e）',
   'Sequential_Tasks_2': '小程序选专家对话（小程序口径）：市场专家 id → accept → expert_actual_use 上报 → 领奖（+200c+5e）',
   'Sequential_Tasks_3': '小程序五次对话（小程序口径）：accept → mini 对话上报 ×5（自动补差额）→ 领奖（+300c+5e）',
@@ -2999,6 +3049,14 @@ function pkDetailCompare(a, b) {
     const n = Number(p && p.size);
     return Number.isFinite(n) ? n : 0;
   };
+  // 主键跟随视图排序模式（pkSortMode，声明在 renderPackages 之后的绑定块）：
+  // end_asc 到期升序（默认）、size_desc 面额降序（同面额按到期升序）。typeof 守卫：
+  // 前端测试按区域切片求值时没有该全局，回落 end_asc（= 原有语义，切片测试的期望序不受影响）。
+  const mode = (typeof pkSortMode === 'string' && pkSortMode) || 'end_asc';
+  if (mode === 'size_desc') {
+    const d = sizeOf(b) - sizeOf(a);
+    if (d !== 0) return d;
+  }
   const ea = pkExpiryMs(a), eb = pkExpiryMs(b);
   if (ea == null && eb != null) return 1;
   if (ea != null && eb == null) return -1;
@@ -3134,13 +3192,41 @@ function renderPackages(d, detailLimit) {
       '</h3><span class="grow"></span><span class="note">余额 ' + fmtTok(a.remain) +
       ' / 总额 ' + fmtTok(a.size) + ' · 可用 ' + (groups.visible.length + groups.rest.length) + ' 个包' +
       (groups.used.length ? ' / 已用完 ' + groups.used.length + ' 个' : '') +
-      ' · 默认展示最早到期 ' + pkDetailLimitValue(detailLimit) + ' 条</span>' +
+      ' · 默认展示最早到期 ' + pkDetailLimitValue(detailLimit) + ' 条（' +
+      esc(PK_SORT_LABELS[pkSortMode] || '') + '）</span>' +
       '</header><div class="tbl-wrap"><table class="acc"><thead><tr>' +
       '<th class="mark" aria-hidden="true"></th><th>包名 / 来源</th>' +
       '<th class="num">面额</th><th class="num">剩余</th><th class="num">已用</th>' +
       '<th class="num">发放</th><th class="num">到期</th>' +
       '</tr></thead><tbody>' + rows + restSummary + usedSummary + '</tbody></table></div></div>';
   }).join('');
+}
+
+/* ── 逐包明细排序模式 ─────────────────────────────────────────────── */
+/* 逐包明细的排序规则（选择持久化在 localStorage，跨会话记住）：
+   end_asc   到期升序（默认）——快过期的包排最前，提醒优先消耗；无到期时间的包
+             （上游没下发 end_time）没有可比的日期，统一垫底，不掺进日期序里；
+   size_desc 面额降序——原来的展示口径，看「钱从哪来」。
+   行序统一由 pkDetailCompare 实现（明细折叠分组共用同一比较器，切换模式时折叠
+   组内行序同步跟随）。本块整体放在 renderPackages 之后：前端测试按区域切片求值
+   （[PK_DEFAULT_DETAIL_LIMIT, renderPackages)），顶层 localStorage 语句落进切片
+   会让无 DOM 桩的求值环境 ReferenceError。 */
+const LS_PK_SORT = 'pkSortMode';
+let pkSortMode = localStorage.getItem(LS_PK_SORT) || 'end_asc';
+const PK_SORT_LABELS = { end_asc: '按到期升序 · 近的在前', size_desc: '按面额降序' };
+
+// 排序规则控件：恢复上次选择并绑定切换；切换时数据在内存就直接重排。
+if ($('pkSort')) {
+  $('pkSort').value = pkSortMode;
+  if ($('pkSort').value !== pkSortMode) {        // localStorage 里存了废弃值：回落默认
+    pkSortMode = 'end_asc';
+    localStorage.setItem(LS_PK_SORT, pkSortMode);   // 不用 removeItem：harness 桩无此方法
+  }
+  $('pkSort').onchange = () => {
+    pkSortMode = $('pkSort').value;
+    localStorage.setItem(LS_PK_SORT, pkSortMode);
+    if (lastPackages) renderPackages(lastPackages, lastPkLimit);
+  };
 }
 
 if ($('pkDetail')) $('pkDetail').addEventListener('click', ev => {
@@ -3202,6 +3288,19 @@ function expBucketList(a) {
     out.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
     return out;
   }
+  // 手动「检查」拉到的实时明细没有预聚合 buckets：按 end_time 自然日聚合
+  // （日期取 +08 口径的 YYYY-MM-DD，与后端 credits_expiry_buckets 同口径）。
+  if (Array.isArray(a && a.packages)) {
+    const byDay = new Map();
+    for (const p of a.packages) {
+      const remain = Number((p && p.remain) || 0);
+      const date = String((p && p.end_time) || '').slice(0, 10);
+      if (remain <= 0 || !date) continue;
+      byDay.set(date, (byDay.get(date) || 0) + remain);
+    }
+    return [...byDay.entries()].map(([date, remain]) => ({ date, remain }))
+      .sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+  }
   // 旧 state 兜底：只有最早一批。
   const ms = a && a.credits_earliest_expiry ? new Date(a.credits_earliest_expiry).getTime() : NaN;
   const remain = Number((a && a.credits_earliest_remaining) || 0);
@@ -3220,9 +3319,16 @@ function expDayDiff(dateStr) {
   return Math.round((ms - base) / PK_DAY_MS);
 }
 
+// 手动「检查」的实时结果（api('packages') 响应）与时间戳。非 null 时快照渲染改用
+// 这份数据（5s 轮询不会把实时结果顶掉）；账号增删/凭据换新由 invalidatePackages
+// 作废，卡片自动回落到快照口径。
+let expLiveSource = null;
+let expLiveAt = 0;
+
 function renderExpirySnapshot(d) {
+  const src = expLiveSource || d;
   const rows = [];
-  for (const a of (d && d.accounts) || []) {
+  for (const a of (src && src.accounts) || []) {
     const bs = expBucketList(a).filter(b => {
       const days = expDayDiff(b.date);
       return days !== null && days >= 0;
@@ -3268,7 +3374,14 @@ function renderExpirySnapshot(d) {
         rest.map(r => rowOf(r, true)).join('') : '');
   // 重建 tbody 后恢复用户上次的展开选择（否则下一轮 5s 轮询会把展开收回）。
   applyRestToggle($('expBody'), restOpen.expBody);
-  // 数据节奏透明化：界面 5 秒轮询，但卡片只随余额后台刷新更新（默认每 5 分钟）。
+  // 数据节奏透明化：平时只随余额后台刷新更新（零上游请求）；点过「检查」后展示
+  // 实时结果及其年龄。
+  if (expLiveSource) {
+    const ageMin = Math.floor((Date.now() - expLiveAt) / 60000);
+    $('expNote').textContent = (rows.length ? rows.length + ' 个账号有未到期批次' : '暂无未来到期批次') +
+      ' · 实时检查' + (ageMin > 0 ? '，' + ageMin + ' 分钟前' : '') + ' · 明细见「积分构成」';
+    return;
+  }
   const iv = Number(d && d.balance_refresh_sec) || 0;
   const at = d && d.balance_refreshed_at ? new Date(d.balance_refreshed_at).getTime() : 0;
   let cadence = '未开启后台刷新';
@@ -3668,7 +3781,36 @@ let lastPackages = null, lastPackagesAt = 0, lastPkLimit = 0;
 // invalidatePackages 账号/凭据/余额变更后作废积分构成与到期明细缓存。
 // 缓存没有 TTL，不加这一处会把旧 401 行一直顶到用户手点刷新——重新登录后
 // 「点检查还是 401」的观感就是这么来的。
-function invalidatePackages() { lastPackages = null; lastPackagesAt = 0; }
+function invalidatePackages() { lastPackages = null; lastPackagesAt = 0; expLiveSource = null; }
+
+/* ── 到期提醒手动「检查」───────────────────────────────────────────── */
+/* 快照卡片平时零上游请求（随 /overview 的 credits_expiry_buckets 被动刷新），
+   但后台余额刷新默认 5 分钟一轮——等不及的用户点「检查」逐账号实时查询。
+   结果写入 expLiveSource（renderExpirySnapshot 优先消费，5s 轮询不会顶掉），
+   并与「积分构成」共用同一份 packages 缓存；EXP_FRESH_MS 内重复点击直接复用。 */
+let expFetching = false;
+const EXP_FRESH_MS = 2 * 60 * 1000;
+async function loadExpiry(force) {
+  if (expFetching) return;
+  const fresh = expLiveSource && (Date.now() - expLiveAt) < EXP_FRESH_MS;
+  if (fresh && !force) { renderExpirySnapshot(); return; }
+  expFetching = true;
+  const btn = $('btnExp');
+  if (btn) { btn.disabled = true; btn.textContent = '检查中…'; }
+  $('expNote').textContent = '查询中…（逐账号向上游实时查询）';
+  try {
+    const d = await api('packages');
+    expLiveSource = d;
+    expLiveAt = Date.now();
+    lastPackages = d;                // 与「积分构成」视图共用同一份缓存
+    lastPackagesAt = expLiveAt;
+    renderExpirySnapshot(d);
+  } catch (e) { $('expNote').textContent = '查询失败：' + e.message; }
+  expFetching = false;
+  if (btn) { btn.disabled = false; btn.textContent = '检查'; }
+}
+// 「检查」始终实时查：显式 force —— 直接 `onclick = loadExpiry` 会把事件对象当真值传进去，恒等于强刷。
+if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
 
 async function loadPackages(force) {
   if (!force && lastPackages) {
@@ -4547,3 +4689,205 @@ function fmtTokens(n) {
   if (n >= 1e4) return (n / 1e4).toFixed(1) + ' 万';
   return String(n);
 }
+/* ── API 密钥分发（字段与口径对齐 workbuddy-manager：0 = 不限制） ───── */
+async function keysApi(path, method, body) {
+  const k = (typeof LS_KEY !== 'undefined' ? localStorage.getItem(LS_KEY) : '') || '';
+  const r = await fetch((location.pathname.replace(/[^/]*$/, '') + 'api/') + path, {
+    method: method || 'GET',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const t = await r.text();
+  let j = null; try { j = JSON.parse(t); } catch (e) {}
+  if (!r.ok) throw new Error((j && (j.message || j.error)) || t || r.status);
+  return j || {};
+}
+
+const kfSplit = s => (s || '').split(/[\n,]/).map(x => x.trim()).filter(Boolean);
+let kfEditing = null;    // null = 新建；否则为正在编辑的密钥对象
+
+function kfTime(s) { return s ? String(s).slice(0, 16).replace('T', ' ') : ''; }
+
+function kfNum(v, d) { const n = parseFloat(v); return isNaN(n) ? d : n; }
+
+async function loadKeys() {
+  const tb = $('kBody');
+  try {
+    const r = await keysApi('keys');
+    const list = r.keys || [];
+    $('kTotal').textContent = list.length;
+    $('kActive').textContent = list.filter(x => x.enabled).length;
+    $('kUsed').textContent = list.reduce((s, x) => s + (x.used_credit || 0), 0).toFixed(2);
+    $('kReq').textContent = list.reduce((s, x) => s + (x.req_count || 0), 0);
+    if (!list.length) {
+      tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="big">暂无 API 密钥</div>点击右上角「新建密钥」创建，并将返回的明文妥善交付给使用方</div></td></tr>';
+      return;
+    }
+    tb.innerHTML = list.map(x => {
+      const exp = x.expires_at ? new Date(x.expires_at) : null;
+      const expired = exp && exp.getTime() < Date.now();
+      const overQuota = (x.quota > 0 && (x.used_tokens || 0) >= x.quota) ||
+        (x.quota_credit > 0 && (x.used_credit || 0) >= x.quota_credit);
+      const tag = !x.enabled ? '<span class="tag bad">已停用</span>'
+        : expired ? '<span class="tag bad">已过期</span>'
+        : overQuota ? '<span class="tag warn">额度已耗尽</span>'
+        : '<span class="tag ok">可用</span>';
+      const realm = x.realm === 'cn' ? '<span class="tag ok">cn</span>'
+        : x.realm === 'global' ? '<span class="tag mute">global</span>'
+        : '<span class="tag mute" title="创建时未限定版本归属，国内版与国际版模型均可调用">不限</span>';
+      const credit = (x.used_credit || 0).toFixed(2) + ' / ' + (x.quota_credit > 0 ? x.quota_credit : '不限');
+      const tokens = (x.used_tokens || 0) + ' / ' + (x.quota > 0 ? x.quota : '不限');
+      const ips = (x.ips || []).join(', ') || '—';
+      return '<tr>' +
+        '<td><b>' + esc(x.name) + '</b></td>' +
+        '<td><code style="font-size:11.5px">' + esc(x.prefix) + '…</code></td>' +
+        '<td>' + tag + '</td>' +
+        '<td>' + realm + '</td>' +
+        '<td style="font-size:11.5px">' + esc(credit) + '</td>' +
+        '<td style="font-size:11.5px">' + esc(tokens) + '</td>' +
+        '<td>' + (x.req_count || 0) + '</td>' +
+        '<td style="font-size:11.5px">' + esc(ips) + (x.max_ips > 0 ? ' <span class="of">/ ' + x.max_ips + '</span>' : '') + '</td>' +
+        '<td style="font-size:11.5px">' + (exp ? esc(kfTime(x.expires_at)) : '长期有效') + '</td>' +
+        '<td style="font-size:11.5px">' + (x.last_used_at ? esc(kfTime(x.last_used_at)) : '—') + '</td>' +
+        '<td class="c-acts">' +
+          '<button class="xs" data-kact="edit" data-id="' + x.id + '">编辑</button> ' +
+          '<button class="xs" data-kact="toggle" data-id="' + x.id + '">' + (x.enabled ? '停用' : '启用') + '</button> ' +
+          '<button class="xs" data-kact="reset" data-id="' + x.id + '">重置用量</button> ' +
+          '<button class="xs danger" data-kact="del" data-id="' + x.id + '">删除</button>' +
+        '</td></tr>';
+    }).join('');
+    tb.querySelectorAll('[data-kact]').forEach(b => b.onclick = () => keyAct(b.dataset.kact, b.dataset.id));
+  } catch (e) {
+    tb.innerHTML = '<tr><td colspan="11"><div class="empty">密钥列表加载失败：' + esc(String(e.message || e)) + '</div></td></tr>';
+  }
+}
+
+async function keyAct(act, id) {
+  try {
+    if (act === 'del') { if (!confirm('确认删除该密钥？删除后使用该密钥的客户端将立即失效，且无法恢复。')) return; await keysApi('keys/' + id, 'DELETE'); }
+    else if (act === 'reset') { if (!confirm('确认重置该密钥的用量统计（积分 / Token / 请求数）？来源 IP 记录将保留。')) return; await keysApi('keys/' + id + '/reset', 'POST'); }
+    else if (act === 'toggle') {
+      const r = await keysApi('keys');
+      const cur = (r.keys || []).find(x => x.id === id);
+      await keysApi('keys/' + id, 'POST', { enabled: !cur.enabled });
+    } else if (act === 'edit') {
+      const r = await keysApi('keys');
+      const cur = (r.keys || []).find(x => x.id === id);
+      if (cur) openKeyForm(cur);
+      return;
+    }
+    loadKeys();
+  } catch (e) { alert('操作失败：' + (e.message || e)); }
+}
+
+function openKeyForm(k) {
+  kfEditing = k || null;
+  $('kfTitle').textContent = k ? '编辑密钥 · ' + k.name : '新建密钥';
+  $('btnKfSave').textContent = k ? '保存' : '创建';
+  $('kfName').value = k ? k.name : '';
+  $('kfRealm').value = k ? (k.realm || '') : 'cn';
+  $('kfDays').value = '0';
+  $('kfExpMode').value = 'keep';
+  $('kfMaxIP').value = String(k ? (k.max_ips || 0) : 0);
+  $('kfQuota').value = String(k ? (k.quota || 0) : 0);
+  $('kfQuotaCredit').value = String(k ? (k.quota_credit || 0) : 0);
+  $('kfIP').value = k ? (k.ip_allowlist || []).join(', ') : '';
+  $('kfModels').value = k ? (k.models || []).join(', ') : '';
+  $('kfMsg').textContent = '';
+  $('kfMsg').hidden = true;
+  $('kfUnknown').hidden = true;
+  $('kfExpModeLb').hidden = !k;
+  $('kfDaysLb').hidden = !!k;
+  $('kfVeil').classList.add('on');
+  setTimeout(() => $('kfName').focus(), 60);
+}
+
+function closeKeyForm() { $('kfVeil').classList.remove('on'); kfEditing = null; }
+
+$('kfExpMode').onchange = () => { $('kfDaysLb').hidden = $('kfExpMode').value !== 'days'; };
+$('btnKfCancel').onclick = closeKeyForm;
+$('btnKeyNew').onclick = () => openKeyForm(null);
+
+// 模型白名单失焦校验：匹配不到已知模型的名字当场点出来（判据由后端给，
+// 与调用侧同一份；拿不到清单时后端返回 checked:false，这里不编造结论）
+$('kfModels').onblur = async () => {
+  const names = kfSplit($('kfModels').value);
+  const box = $('kfUnknown');
+  if (!names.length) { box.hidden = true; return; }
+  try {
+    const r = await keysApi('keys/check-models', 'POST', { models: names, realm: $('kfRealm').value || '' });
+    if (!r.checked) { box.hidden = true; return; }
+    const un = r.unknown || [];
+    box.hidden = !un.length;
+    box.textContent = un.length ? '以下模型名在网关模型列表中不存在：' + un.join('、') : '';
+  } catch (e) { box.hidden = true; }
+};
+
+function kfError(msg, focusId) {
+  const box = $('kfMsg');
+  box.textContent = msg;
+  box.hidden = false;
+  if (focusId) $(focusId).focus();
+}
+
+$('btnKfSave').onclick = async () => {
+  const k = kfEditing;
+  const name = $('kfName').value.trim();
+  if (!name) { kfError('密钥名称不能为空', 'kfName'); return; }
+  const days = parseInt($('kfDays').value, 10) || 0;
+  const body = {
+    name: name,
+    realm: $('kfRealm').value || '',
+    max_ips: parseInt($('kfMaxIP').value, 10) || 0,
+    quota: parseInt($('kfQuota').value, 10) || 0,
+    quota_credit: kfNum($('kfQuotaCredit').value, 0),
+    ip_allowlist: kfSplit($('kfIP').value),
+    models: kfSplit($('kfModels').value),
+  };
+  // 新建：填了天数才设过期（0 = 长期有效）
+  // 编辑：按显式选择处理，避免「打开就保存」把有效期重置；never 传 null
+  if (!k) {
+    if (days > 0) body.expires_at = new Date(Date.now() + days * 86400000).toISOString();
+  } else {
+    const mode = $('kfExpMode').value;
+    if (mode === 'days') {
+      if (days <= 0) { kfError('选择了「自当前时间起 N 天」，请填写有效天数', 'kfDays'); return; }
+      body.expires_at = new Date(Date.now() + days * 86400000).toISOString();
+    } else if (mode === 'never') {
+      body.expires_at = null;
+    }
+  }
+  $('btnKfSave').disabled = true;
+  try {
+    if (k) {
+      await keysApi('keys/' + k.id, 'POST', body);
+      closeKeyForm();
+      loadKeys();
+    } else {
+      const r = await keysApi('keys', 'POST', body);
+      closeKeyForm();
+      showIssued(r.plain || '');
+      loadKeys();
+    }
+  } catch (e) {
+    kfError('保存失败：' + (e.message || e));
+  } finally {
+    $('btnKfSave').disabled = false;
+  }
+};
+
+function showIssued(plain) {
+  $('kIssuedKey').value = plain;
+  $('kIssuedBase').value = location.origin + '/v1';
+  $('kIssuedVeil').classList.add('on');
+}
+
+$('btnKIssuedClose').onclick = () => $('kIssuedVeil').classList.remove('on');
+$('btnKIssuedCopy').onclick = () => {
+  const el = $('kIssuedKey');
+  el.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  if (navigator.clipboard) navigator.clipboard.writeText(el.value).catch(() => {});
+  $('btnKIssuedCopy').textContent = '已复制';
+  setTimeout(() => $('btnKIssuedCopy').textContent = '复制', 1500);
+};

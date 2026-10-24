@@ -25,6 +25,11 @@ type Config struct {
 	AuthDir   string `json:"auth_dir"`   // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
 
+	// TrustProxy 是否信任反向代理的 X-Forwarded-For / X-Real-IP。
+	// false（默认）= 直连取 RemoteAddr；true = 优先取代理头。影响分发密钥的
+	// IP 白名单/限流判定（keys.json 侧），不改聊天链路的取值。
+	TrustProxy bool `json:"trust_proxy"`
+
 	// DNSServers 出站解析用的 DNS 服务器（空 = 用系统解析器）；也可用 WB2A_DNS 覆盖
 	// （逗号分隔）。给没有 /etc/resolv.conf 的环境用：Android 上 Go 的解析器会退回
 	// [::1]:53，所有域名解析直接失败；本地 DNS 被污染时也可借此直连可信解析器。
@@ -294,15 +299,19 @@ type Config struct {
 		// 0.2 = 便宜模型（x0.11 这类）在触底号上放行入账，x1.62 这类仍按收费拦。
 		// 0 = 严格模式（任何已知正倍率都拦）；负值钳 0。面板「积分保底」档位旁可改。
 		CreditFloorMaxRate float64 `json:"credit_floor_max_rate"`
-		// ModelFallback 模型降级路由表：key = 客户端请求的模型（裸名），
-		// value = 该模型被 6004 模型级限流时改用的等价模型。
-		// 例：{"deepseek-v4.1-flash": "deepseek-v4-flash"}。
+		// ModelFallback 模型降级路由表：key = 客户端请求的模型（可带 realm 前缀，
+		// 与请求里的 model 字段逐字匹配），value = 有序降级链（候选模型名列表）。
+		// 例：{"deepseek-v4.1-flash": ["deepseek-v4-flash", "deepseek-v4"]}。
 		//
-		// 语义：等价模型是同一底层能力、只是计价不同；便宜的那个被限流时改用
-		// 稍贵的继续服务（可用性优先），限流解除后自动回原模型（不写持久状态）。
+		// 语义：等价模型是同一底层能力、只是计价不同；模型被 6004 模型级限流时
+		// 沿链依次改用下一候选继续服务（可用性优先），限流解除后自动回原模型
+		//（不写持久状态）。链上每项再按本表递归展开（限深 3、去重，见
+		// internal/autoroute 的 expand），与 auto_model.fallback 可叠加——前者是
+		// 「具名模型」的链，后者是「auto 虚拟模型」的链，两条链可组合。
+		// 单元素链等价旧版单跳行为（老配置无需改动，对老配置零影响）。
 		// 只对 6004 生效；11102/11101/普通 429/5xx 都不降级。
-		// 缺省 nil = 不降级（对老配置零影响）。
-		ModelFallback map[string]string `json:"model_fallback"`
+		// 缺省 nil = 不降级。
+		ModelFallback map[string][]string `json:"model_fallback"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -487,8 +496,9 @@ func Default() *Config {
 
 // Auto 把配置段转成编排层配置（autoroute）。空项在此归一（去空、trim）。
 //
-// model_fallback：本项目的表是「裸名 → 单个等价模型」，编排层的链表口径是
-// 「裸名 → 候选链」——此处逐项转成单元素链，链上递归展开语义不变（A→B，B 再查表）。
+// model_fallback：本项目的表是「模型名 → 有序候选链」，与编排层的链表口径
+// 一致——此处仅做 trim/去空归一；链上每项的递归展开（限深 3、去重，可与
+// auto_model.fallback 叠加）由编排层 expand 完成（A→B，B 再查表）。
 func (c *Config) Auto() autoroute.Config {
 	fb := make([]string, 0, len(c.AutoModel.Fallback))
 	for _, m := range c.AutoModel.Fallback {
@@ -499,11 +509,18 @@ func (c *Config) Auto() autoroute.Config {
 	mf := make(map[string][]string, len(c.Pool.ModelFallback))
 	for k, v := range c.Pool.ModelFallback {
 		key := strings.TrimSpace(k)
-		to := strings.TrimSpace(v)
-		if key == "" || to == "" || key == to {
+		if key == "" {
 			continue
 		}
-		mf[key] = []string{to}
+		list := make([]string, 0, len(v))
+		for _, m := range v {
+			if s := strings.TrimSpace(m); s != "" {
+				list = append(list, s)
+			}
+		}
+		if len(list) > 0 {
+			mf[key] = list
+		}
 	}
 	return autoroute.Config{
 		Enabled:       c.AutoModel.Enabled,

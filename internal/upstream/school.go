@@ -42,6 +42,19 @@ func (c *Client) schoolJSON(a *auth.Auth, method, path string, body map[string]a
 	return nil
 }
 
+// schoolOpenDayActivityID 开学季/校园日活动 id（事件 activityId 字段值，两域共用）。
+const schoolOpenDayActivityID = "school_open_day_2026"
+
+// SchoolSeasonChatEvent 构造 growth 域「校园日」（school_season）判据事件：
+// mini 指纹 chat_request_send + activityId=school_open_day_2026（与 school 域
+// 开学季同 activityId 关联；实测无 activityId 的事件不点亮）。事件形状与
+// MiniChatSendEvent 同构（Sequential 对话任务同款），仅追加 activityId。
+func SchoolSeasonChatEvent(conversationID string) map[string]any {
+	ev := MiniChatSendEvent(conversationID)
+	ev["activityId"] = schoolOpenDayActivityID
+	return ev
+}
+
 // SchoolVoucher 开学季抽奖抽中的第三方券（KFC/瑞幸/酷狗等）。
 // 字段结构按真实响应样本：GET /vouchers 单次拉全（无分页），data.items[]。
 type SchoolVoucher struct {

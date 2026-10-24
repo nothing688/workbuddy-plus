@@ -708,6 +708,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
+      <li><a href="#keys" data-view="keys">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
+        API 密钥</a></li>
       <li><a href="#logs" data-view="logs">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>
         运行日志</a></li>
@@ -762,6 +765,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>积分到期提醒 <span class="hint">按自然日聚合 · 日均需耗 = 该日到期积分 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</span></h3>
           <span class="grow"></span>
           <span class="note" id="expNote"></span>
+          <button class="xs" id="btnExp" title="逐账号向上游实时查询一次积分到期批次，结果与「积分构成」共用缓存">检查</button>
         </header>
         <div class="tbl-wrap">
         <table class="acc">
@@ -1003,6 +1007,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>账号对比</h3>
           <span class="grow"></span>
           <span class="note" id="pkNote">—</span>
+          <select id="pkSort" class="xs" title="逐包明细的排序规则">
+            <option value="end_asc" selected>按到期时间</option>
+            <option value="size_desc">按面额大小</option>
+          </select>
           <button class="xs" id="btnPk">刷新</button>
         </header>
         <div class="pad"><div class="pk-grid" id="pkSummary"></div></div>
@@ -1326,6 +1334,42 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
 
         <div class="box">
+          <header><h3>模型编排</h3><span class="grow"></span><span class="note">保存即生效，无需重启</span></header>
+          <div class="pad">
+            <div class="switch"><span class="lb">启用模型编排（auto 虚拟模型）</span>
+              <input type="checkbox" name="auto_enabled"></div>
+            <span class="hint">客户端写 model=auto 时，网关按当前时段选主模型；限流 / 额度耗尽 / 该后端无此模型 / 上游故障时按降级链自动切换。关闭时 auto 就是普通模型名，行为与未启用前一致。</span>
+            <div class="hr"></div>
+            <div class="grid2">
+              <label class="fld"><span class="lb">虚拟模型名</span>
+                <input name="auto_virtual_id" placeholder="auto">
+                <span class="hint">客户端用此名请求。上游若已下发同名真实模型，默认让位不接管；改名（如 auto-router）或开启下方「覆盖同名上游模型」才会接管</span></label>
+              <label class="fld"><span class="lb">白天主模型</span>
+                <input name="auto_day_primary" placeholder="cn:fast-model">
+                <span class="hint">须带版本前缀：cn: 或 global:</span></label>
+              <label class="fld"><span class="lb">夜间主模型</span>
+                <input name="auto_night_primary" placeholder="cn:fast-model"></label>
+              <label class="fld"><span class="lb">白天窗口（起 / 止 小时）</span>
+                <div class="inline"><input name="auto_day_start" type="number" min="0" max="23" placeholder="8">
+                  <input name="auto_day_end" type="number" min="0" max="23" placeholder="23"></div>
+                <span class="hint">北京时间；[起, 止) 之内走白天主模型，之外走夜间主模型</span></label>
+            </div>
+            <label class="fld"><span class="lb">降级链（逗号分隔，有序）</span>
+              <input name="auto_fallback" placeholder="cn:balanced-model, global:hy3">
+              <span class="hint">主模型不可用时依次尝试；链上每项都会再按下方「具名模型降级表」展开</span></label>
+            <label class="fld"><span class="lb">具名模型降级表（JSON 对象）</span>
+              <textarea name="model_fallback" rows="4" style="width:100%;min-height:72px" placeholder='{"cn:deep-model": ["cn:fast-model"]}'></textarea>
+              <span class="hint">给具体模型配独立降级链：键为客户端写的模型名，值为候选模型名数组</span></label>
+            <div class="switch"><span class="lb">空回复视为失败并降级</span>
+              <input type="checkbox" name="auto_on_empty"></div>
+            <span class="hint">部分模型推理预算吃满会返回 200 但正文为空（无报错）。开启后自动换下一个候选模型；单一模型（无候选）时零影响</span>
+            <div class="switch"><span class="lb">覆盖同名上游模型</span>
+              <input type="checkbox" name="auto_override"></div>
+            <span class="hint">虚拟模型名与上游真实模型同名时仍然接管（列表里不会出现重复 id）</span>
+          </div>
+        </div>
+
+        <div class="box">
           <header><h3>日志</h3></header>
           <div class="pad">
             <div class="switch"><span class="lb">记录调用来源（客户端 IP / User-Agent）</span>
@@ -1346,6 +1390,34 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     </section>
 
     <!-- 日志 -->
+    <section class="view" id="view-keys" hidden>
+      <div class="stats">
+        <div class="stat"><div class="v" id="kTotal">-</div><div class="k">密钥总数</div></div>
+        <div class="stat good"><div class="v" id="kActive">-</div><div class="k">启用中</div></div>
+        <div class="stat warn"><div class="v" id="kUsed">-</div><div class="k">累计消耗积分</div></div>
+        <div class="stat"><div class="v" id="kReq">-</div><div class="k">累计请求数</div></div>
+      </div>
+
+      <div class="box">
+        <header>
+          <h3>API 密钥</h3>
+          <span class="grow"></span>
+          <span class="note">数值字段填 0 表示不限制；明文仅在创建时返回一次，服务端仅保存 SHA-256 摘要</span>
+          <button class="xs primary" id="btnKeyNew">新建密钥</button>
+        </header>
+        <div class="tbl-wrap">
+          <table class="acc">
+            <thead><tr>
+              <th>密钥名称</th><th>密钥前缀</th><th>状态</th><th>版本归属</th>
+              <th>积分用量</th><th>Token 用量</th>
+              <th>请求数</th><th>来源 IP</th><th>有效期</th><th>最近调用</th><th class="c-acts"></th>
+            </tr></thead>
+            <tbody id="kBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="view" id="view-logs" hidden>
       <div class="box">
         <header>
@@ -1450,6 +1522,64 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     </section>
   </div>
 </div>
+
+    <!-- 新建 / 编辑密钥 -->
+    <div class="veil" id="kfVeil">
+      <div class="dlg" style="width:580px">
+        <header>
+          <h3 id="kfTitle">新建密钥</h3>
+          <div class="hint">数值字段填 0 表示不限制；有效期单位为天，填 0 表示长期有效。</div>
+          <div id="kfMsg" hidden style="margin-top:8px;padding:8px 11px;border-radius:8px;background:var(--bad-soft);color:var(--bad);font-size:12.5px;font-weight:600;white-space:pre-line"></div>
+        </header>
+        <div class="body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
+            <label class="fld"><span class="lb">密钥名称</span><input id="kfName" placeholder="用于区分用途，例如：生产环境-服务A"></label>
+            <label class="fld"><span class="lb">版本归属</span><select id="kfRealm">
+              <option value="cn" selected>cn（国内版）</option>
+              <option value="global">global（国际版）</option>
+              <option value="">不限（国内版与国际版均可）</option>
+            </select></label>
+            <label class="fld" id="kfDaysLb"><span class="lb">有效期（天，0 = 长期有效）</span><input id="kfDays" type="number" min="0" value="0"></label>
+            <label class="fld" id="kfExpModeLb" hidden><span class="lb">有效期</span><select id="kfExpMode">
+              <option value="keep" selected>保持不变</option>
+              <option value="days">自当前时间起 N 天</option>
+              <option value="never">长期有效</option>
+            </select></label>
+            <label class="fld"><span class="lb">最大来源 IP 数（0 = 不限制）</span><input id="kfMaxIP" type="number" min="0" value="0"></label>
+            <label class="fld"><span class="lb">Token 用量上限（0 = 不限制）</span><input id="kfQuota" type="number" min="0" value="0"></label>
+            <label class="fld"><span class="lb">积分用量上限（0 = 不限制）</span><input id="kfQuotaCredit" type="number" min="0" step="any" value="0"></label>
+            <label class="fld"><span class="lb">来源 IP 白名单（逗号分隔，支持 CIDR）</span><input id="kfIP" placeholder="10.0.0.0/8, 1.2.3.4"></label>
+          </div>
+          <label class="fld"><span class="lb">模型白名单（逗号分隔，留空 = 允许全部）</span><input id="kfModels" placeholder="cn:glm-5.3, global:gpt-5.4">
+            <span class="hint">模型名中的 global: 前缀表示国际版模型；该前缀与「版本归属」为两项独立校验，需同时满足。</span></label>
+          <div id="kfUnknown" hidden style="padding:8px 11px;border-radius:8px;background:var(--warn-soft,rgba(240,180,60,.12));color:var(--warn,#e0a030);font-size:12.5px;font-weight:600"></div>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button id="btnKfCancel">取消</button>
+          <button class="primary" id="btnKfSave">创建</button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- 明文只显示一次 -->
+    <div class="veil" id="kIssuedVeil">
+      <div class="dlg" style="width:580px">
+        <header>
+          <h3>密钥已创建</h3>
+          <div class="hint">API Key 明文仅在此处展示一次，关闭后无法找回，请立即保存并妥善交付给使用方。</div>
+        </header>
+        <div class="body">
+          <label class="fld"><span class="lb">API Key（明文）</span><input id="kIssuedKey" readonly></label>
+          <label class="fld"><span class="lb">Base URL（接口地址）</span><input id="kIssuedBase" readonly></label>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="xs" id="btnKIssuedCopy">复制</button>
+          <button class="primary" id="btnKIssuedClose">我已保存</button>
+        </footer>
+      </div>
+    </div>
 
 <!-- 积分任务 -->
 <div class="veil" id="taskVeil">

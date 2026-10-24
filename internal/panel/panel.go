@@ -207,6 +207,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/keys/{id}", p.withAuth(p.keysPatch))
 	p.mux.HandleFunc("DELETE /panel/api/keys/{id}", p.withAuth(p.keysDelete))
 	p.mux.HandleFunc("POST /panel/api/keys/{id}/reset", p.withAuth(p.keysReset))
+	p.mux.HandleFunc("POST /panel/api/keys/check-models", p.withAuth(p.keysCheckModels))
 	// (账号 × 模型) 手动开关：运维显式禁用某账号的某模型（永久语义，仅手动解）。
 	// 与上游触发的临时冷却（6004/11102）正交，且手动优先。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/model_toggle", p.withAuth(p.modelToggle))
