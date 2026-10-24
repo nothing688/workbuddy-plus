@@ -1,0 +1,274 @@
+name: autobot
+
+# 三步：clone 每个参考仓库 → agent 读代码写差异报告 → 汇总选优后写 Go 实现并开 PR。
+# 声明与禁项在仓库根的 AutoBot.yml；这里只做执行与分片。
+# 注意：用 AUTOBOT_TOKEN（PAT）而不是默认 GITHUB_TOKEN——后者触发的 push/PR
+# 不会再触发其它 workflow，PR 上就不会有 binaries 的 test 与四平台构建。
+
+on:
+  schedule:
+    - cron: "30 1 * * *" # UTC 01:30 = 上海 09:30
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "只分析这一个仓库（owner/name），留空则按 AutoBot.yml 全量"
+        required: false
+      phase:
+        description: "analyze / implement / all"
+        required: false
+        default: all
+      reports_run:
+        description: "implement 复用的报告来自哪一轮 run id（留空=本轮）"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: autobot
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.shards.outputs.matrix }}
+      repos: ${{ steps.shards.outputs.repos }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 按 AutoBot.yml 生成分片
+        id: shards
+        env:
+          SRC: ${{ inputs.repo }}
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, math, os, yaml
+          cfg = yaml.safe_load(open("AutoBot.yml", encoding="utf-8"))["upstream"]
+          # 指定单仓时只切 1 片：否则会起 66 个 job 全部跳过，看着像 66 个假成功
+          src = (os.environ.get("SRC") or "").strip()
+          repos = [src] if src else cfg["repos"]
+          size = int(cfg.get("shard_size") or 4)
+          n = math.ceil(len(repos) / size)
+          print("repos=%d" % len(repos))
+          print("matrix=" + json.dumps({"shard": [f"{i}/{n}" for i in range(n)]}))
+          PY
+
+  analyze:
+    needs: plan
+    if: inputs.phase != 'implement' 
+    # 66 个仓一个 job 串行跑不完，按片并行；每片自己 clone、自己分析、自己上传报告
+    strategy:
+      fail-fast: false
+      # 免费档 10 RPM 且同类型 Key 共享一个池：并发跑 N 个 job 就是 N 倍超出，
+      # 只能串行。68 仓 × 约 30 次调用 ÷ 10 RPM ≈ 3.4 小时，这是下限。
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装 Hermes Agent 并写入网关配置
+        env:
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          HERMES_HOME: ${{ runner.temp }}/hermes
+        run: |
+          pip install --quiet 'hermes-agent[acp]' pyyaml
+          mkdir -p "$HERMES_HOME"
+          python3 - <<'PY'
+          import os
+          m = os.environ["LLM_MODEL"]
+          api = os.environ["LLM_BASE_URL"].rstrip("/")
+          cfg = (
+              "providers:\n"
+              "  ci:\n"
+              "    name: ci\n"
+              f"    api: {api}\n"
+              f"    api_key: {os.environ['LLM_API_KEY']}\n"
+              "    transport: chat_completions\n"
+              f"    default_model: \"{m}\"\n"
+              "    models:\n"
+              f"      \"{m}\":\n"
+              "        context_length: 524288\n"
+              "model:\n"
+              f"  default: \"{m}\"\n"
+              "  provider: ci\n"
+              # CI 没人点审批：yolo 之外再关掉审批层，免得工具调用等一个不存在的按钮
+              "approvals:\n"
+              "  mode: off\n")
+          open(os.path.join(os.environ["HERMES_HOME"], "config.yaml"), "w").write(cfg)
+          PY
+          hermes --version
+      - name: 探活模型网关
+        # 网关/模型名不通时会在 agent 里挂满 25 分钟才超时，这里先 90 秒问一次
+        env:
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          code=$(curl -s -o /tmp/probe.json -w '%{http_code}' -m 90 -X POST "$LLM_BASE_URL/chat/completions" \
+            -H "Authorization: Bearer $LLM_API_KEY" -H 'Content-Type: application/json' \
+            -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4}")
+          echo "HTTP $code"; head -c 400 /tmp/probe.json; echo
+          [ "$code" = "200" ] || { echo "网关不可用：$LLM_BASE_URL / $LLM_MODEL"; exit 1; }
+          # agent 走流式；流式挂住时会静默等到超时，一个字都不打印
+          stream=$(curl -sN -m 60 -X POST "$LLM_BASE_URL/chat/completions" \
+            -H "Authorization: Bearer $LLM_API_KEY" -H 'Content-Type: application/json' \
+            -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":true,\"max_tokens\":4}" | head -c 300)
+          echo "流式: $stream"
+          case "$stream" in *data:*) ;; *) echo "流式无输出，agent 会一直挂着"; exit 1;; esac
+
+      - name: Hermes 自检
+        # agent 静默超时时分不清是网关慢还是 agent 跑不起来，先花 5 分钟问清楚
+        timeout-minutes: 6
+        env:
+          HERMES_HOME: ${{ runner.temp }}/hermes
+          HERMES_YOLO_MODE: "1"
+        run: |
+          rm -f /tmp/hermes-selftest.txt
+          # ACP 与 -z 的依赖不同：-z 能跑不代表 ACP 能起
+          timeout 120 hermes acp --check || echo "acp --check 退出码 $?"
+          timeout 240 hermes -z "用 write 工具把 exactly-ok 写进 /tmp/hermes-selftest.txt，然后结束。不要做别的。" \
+            --yolo --accept-hooks < /dev/null || echo "退出码 $?"
+          echo "--- 产物:"; cat /tmp/hermes-selftest.txt 2>/dev/null || echo "(没有产物)"
+          test -f /tmp/hermes-selftest.txt
+
+      - name: 分析这一片
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          HERMES_HOME: ${{ runner.temp }}/hermes
+          HERMES_YOLO_MODE: "1"
+          AGENT: hermes
+          SRC: ${{ inputs.repo }}
+        run: |
+          if [ -n "$SRC" ]; then
+            python3 scripts/autobot.py --phase analyze --repo "$SRC"
+          else
+            python3 scripts/autobot.py --phase analyze --shard "${{ matrix.shard }}"
+          fi
+      - name: 报告进 job summary
+        if: always()
+        run: cat autobot-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-${{ strategy.job-index }}
+          path: /tmp/autobot-reports
+          if-no-files-found: ignore
+
+  implement:
+    needs: analyze
+    # phase=analyze 只出报告；不挡的话验证一次就会多开一个 PR
+    if: always() && inputs.phase != 'analyze' && needs.analyze.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.AUTOBOT_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装 Hermes Agent 并写入网关配置
+        env:
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          HERMES_HOME: ${{ runner.temp }}/hermes
+        run: |
+          pip install --quiet 'hermes-agent[acp]'
+          mkdir -p "$HERMES_HOME"
+          python3 - <<'PY'
+          import os
+          m = os.environ["LLM_MODEL"]
+          api = os.environ["LLM_BASE_URL"].rstrip("/")
+          cfg = (
+              "providers:\n"
+              "  ci:\n"
+              "    name: ci\n"
+              f"    api: {api}\n"
+              f"    api_key: {os.environ['LLM_API_KEY']}\n"
+              "    transport: chat_completions\n"
+              f"    default_model: \"{m}\"\n"
+              "    models:\n"
+              f"      \"{m}\":\n"
+              "        context_length: 524288\n"
+              "model:\n"
+              f"  default: \"{m}\"\n"
+              "  provider: ci\n"
+              # CI 没人点审批：yolo 之外再关掉审批层，免得工具调用等一个不存在的按钮
+              "approvals:\n"
+              "  mode: off\n")
+          open(os.path.join(os.environ["HERMES_HOME"], "config.yaml"), "w").write(cfg)
+          PY
+          HERMES_HOME="$HERMES_HOME" hermes --version
+      - name: Hermes 自检
+        # 首次运行可能弹交互式向导，CI 里没人点就卡到超时；5 分钟内先问清楚
+        timeout-minutes: 6
+        env:
+          HERMES_HOME: ${{ runner.temp }}/hermes
+          HERMES_YOLO_MODE: "1"
+        run: |
+          rm -f /tmp/hermes-selftest.txt
+          # ACP 与 -z 的依赖不同：-z 能跑不代表 ACP 能起
+          timeout 120 hermes acp --check || echo "acp --check 退出码 $?"
+          timeout 240 hermes -z "用 write 工具把 exactly-ok 写进 /tmp/hermes-selftest.txt，然后结束。不要做别的。" \
+            --yolo --accept-hooks < /dev/null || echo "退出码 $?"
+          echo "--- 产物:"; cat /tmp/hermes-selftest.txt 2>/dev/null || echo "(没有产物)"
+          test -f /tmp/hermes-selftest.txt
+
+      - uses: actions/download-artifact@v4
+        if: inputs.reports_run == ''
+        with:
+          path: /tmp/artifacts
+          pattern: reports-*
+      - name: 复用指定轮次的报告
+        if: inputs.reports_run != ''
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBOT_TOKEN }}
+        run: |
+          mkdir -p /tmp/artifacts
+          gh run download "${{ inputs.reports_run }}" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'reports-*' --dir /tmp/artifacts
+      - name: 汇总报告
+        run: |
+          mkdir -p /tmp/autobot-reports
+          if [ -d /tmp/artifacts ]; then
+            find /tmp/artifacts -name '*.md' -exec cp {} /tmp/autobot-reports/ \;
+          fi
+          echo "报告数: $(ls /tmp/autobot-reports | wc -l)"
+      - name: 落地并开 PR
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBOT_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          HERMES_HOME: ${{ runner.temp }}/hermes
+          HERMES_YOLO_MODE: "1"
+          AGENT: hermes
+        run: python3 scripts/autobot.py --phase implement
+      - name: 报告进 job summary
+        if: always()
+        run: cat autobot-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
