@@ -36,6 +36,8 @@ docs/
 *.md
 !README.md
 !AGENTS.md
+# go:embed 的内置提示词：缺了它 CI 构建直接报 no matching files
+!defaultprompt.md
 
 # Windows binaries
 /wb2api.exe
