@@ -902,8 +902,13 @@ body {
    窄屏（<900）退回自动换行，交给上面的 flex-basis。 */
 @media (min-width: 901px) {
   #view-accounts .stats > .stat:nth-child(-n+4) { flex: 1 1 calc(25% - 11px); }
-  #view-accounts .stats > .stat:nth-child(n+5) { flex: 1 1 calc(33.333% - 10px); }
+  /* 第二行：积分按内容吃宽度（JS 量完写 flex-basis），右边两张均分剩余，
+     但**不会被压到比上排卡片更窄**（min-width 对齐 1/4）。 */
+  #view-accounts .stats > .stat:nth-child(5) { flex: 1 1 calc(33.333% - 10px); }
+  #view-accounts .stats > .stat:nth-child(n+6) { flex: 1 1 0; min-width: calc(25% - 11px); }
 }
+/* 积分数值默认不折行：宽度不够时先由 JS 把卡片撑宽，实在放不下才回调成折行。 */
+#sCredits { flex-wrap: nowrap; }
 /* 窄屏：积分那张单独占满一行。它是唯一带「X / Y」两段数字的卡片，跟别人挤半行时
    只放得下 6 位；单独一行能放到 13 位以上，也不会因为折行变高。 */
 @media (max-width: 900px) {

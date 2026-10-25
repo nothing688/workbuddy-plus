@@ -1221,6 +1221,44 @@ function renderModelLocks(rows) {
   }).join('');
 }
 
+/* 积分卡按内容吃宽度，保证数值单行：
+   - 默认与另外两张各占 1/3；
+   - 数字变长就把右边「粘性 / 已禁用」压窄，最多压到 1/4（与上排卡片同宽）；
+   - 到上限还放不下才折行（宁可两行，也不顶出卡片）。
+   窄屏（<901）由 CSS 让它独占一行，这里直接返回。 */
+function fitCreditsCard() {
+  const v = $('sCredits');
+  if (!v) return;
+  const card = v.closest('.stat');
+  if (!card) return;
+  const stats = card.parentElement;
+  card.style.flex = '';
+  v.style.flexWrap = '';
+  // 单测会把 loadOverview 单独切出来跑，那里没有 window；真浏览器里才有排版可算。
+  if (typeof window === 'undefined' || !window.matchMedia ||
+      !window.matchMedia('(min-width: 901px)').matches) return;
+  const W = stats.clientWidth;
+  if (!W) return;
+  const cs = getComputedStyle(card);
+  const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) +
+    parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+  const gap = parseFloat(getComputedStyle(stats).columnGap) || 14;
+  const third = (W - gap * 2) / 3;
+  const quarter = (W - gap * 3) / 4;
+  const cap = W - gap * 2 - quarter * 2;   // 右边两张压到 1/4 时积分卡能占到的上限
+  const range = document.createRange();
+  range.selectNodeContents(v);
+  const need = range.getBoundingClientRect().width + pad + 2;
+  card.style.flex = '0 0 ' + Math.round(Math.max(third, Math.min(need, cap))) + 'px';
+  if (need > cap) v.style.flexWrap = 'wrap'; // 到上限仍放不下：折行，别溢出
+}
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('resize', () => {
+    clearTimeout(fitCreditsCard._t);
+    fitCreditsCard._t = setTimeout(fitCreditsCard, 120);
+  });
+}
+
 async function loadOverview(quiet) {
   try {
     const d = await api('overview');
@@ -1249,6 +1287,7 @@ async function loadOverview(quiet) {
     $('sCredits').innerHTML = totSum > 0
       ? String(remSum) + '<span class="of">/ ' + totSum + '</span>'
       : String(remSum);
+    if (typeof fitCreditsCard === 'function') fitCreditsCard();
     $('sCredits').title = d.disabled
       ? '剩余合计（不含已禁用 ' + d.disabled + ' 个账号）/ 总额合计（含全部账号）'
       : '剩余合计 / 总额合计（均含全部账号）';
