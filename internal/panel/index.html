@@ -1311,6 +1311,20 @@ input::placeholder { color: var(--ink-3); }
 /* 健康色条随行高铺满（多行账号信息时不再只画一小段） */
 .acc td.mark { position: relative; padding: 0; }
 .acc td.mark i { position: absolute; left: 0; top: 0; bottom: 0; height: auto; min-height: 0; width: 3px; }
+
+/* ── 字重收敛：标题与指标数字统一降到 500 ─────────────────────────
+   原来标题 620/650、统计卡数字 650；中文在低分屏上笔画会糊在一起，看着像「被加粗」，
+   反而不如中等字重清楚。这里只调字重，不动字号与排版。 */
+.brand .name,
+.topbar h2,
+.box > header h3,
+.dlg header h3 { font-weight: 500; }
+
+.stat .v,
+.stats .st .v,
+.kpi .v,
+.pk-card .big,
+.usage-item b { font-weight: 500; }
 </style>
 </head>
 <body>
