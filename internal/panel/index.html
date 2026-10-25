@@ -884,15 +884,25 @@ body {
 .topbar .icon:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line); }
 
 /* ── 统计区：独立卡片，不再是一整条表格 ─────────────────────────── */
+/* 用 flex 而不是 grid：卡片数不固定（账号池 7 张、积分/余额 4 张），grid 的
+   auto-fit 会在最后一行留下等宽空格（7 张时是「5 + 2，右边一大片空白」）。
+   账号池固定排成「上 4 下 3」，两行都刚好铺满，单张宽 300+，不再挤在 176px 里。 */
 .stats {
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-  gap: 12px; border: 0; background: transparent; box-shadow: none;
+  display: flex; flex-wrap: wrap;
+  gap: 14px; border: 0; background: transparent; box-shadow: none;
   overflow: visible; margin-bottom: 18px;
 }
 .stat, .stats .st {
+  flex: 1 1 172px; min-width: 0;
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--surface); padding: 14px 16px; box-shadow: var(--shadow-1);
+  background: var(--surface); padding: 16px 18px; box-shadow: var(--shadow-1);
   transition: border-color .16s, transform .16s;
+}
+/* 4 + 3 的意图排法：前四张按 1/4 铺、后三张按 1/3 铺，行尾不留缺口。
+   窄屏（<900）退回自动换行，交给上面的 flex-basis。 */
+@media (min-width: 901px) {
+  #view-accounts .stats > .stat:nth-child(-n+4) { flex: 1 1 calc(25% - 11px); }
+  #view-accounts .stats > .stat:nth-child(n+5) { flex: 1 1 calc(33.333% - 10px); }
 }
 .stat:hover, .stats .st:hover { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); }
 /* 数值必须在卡片里：网格轨道允许收缩（min-width:0），长数字（剩下的 / 总额）按
@@ -1388,11 +1398,11 @@ input::placeholder { color: var(--ink-3); }
       <div class="stats">
         <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
         <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
+        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分 剩余 / 总额</div></div>
+        <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
         <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
         <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分 剩余 / 总额</div></div>
-        <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
       </div>
 
       <div class="box">
