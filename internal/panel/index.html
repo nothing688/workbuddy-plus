@@ -1083,6 +1083,13 @@ input::placeholder { color: var(--ink-3); }
     grid-column: 1 / -1; order: 0;
   }
 }
+
+/* 顶栏固定单行：添加账号始终在右上角，不再被挤到第二行 */
+.topbar { flex-wrap: nowrap; }
+@media (max-width: 760px) {
+  .topbar { flex-wrap: nowrap; overflow: hidden; }
+  .topbar #btnAdd { margin-left: auto; }
+}
 </style>
 </head>
 <body>
@@ -1148,6 +1155,9 @@ input::placeholder { color: var(--ink-3); }
       <button class="icon ghost" id="btnRefresh" title="刷新" aria-label="刷新">
         <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3"/></svg>
       </button>
+      <button class="icon primary" id="btnAdd" title="添加账号（浏览器登录 / 导入 JSON）" aria-label="添加账号">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3.5v9M3.5 8h9"/></svg>
+      </button>
     </div>
 
     <!-- 账号池 -->
@@ -1188,7 +1198,6 @@ input::placeholder { color: var(--ink-3); }
           <h3>账号池</h3>
           <span class="grow"></span>
           <span class="note" id="accNote"></span>
-          <button class="xs primary" id="btnAdd" title="添加账号（浏览器登录 / 导入 JSON）">＋ 添加账号</button>
           <button class="xs" id="btnExportAccounts" title="导出全部账号为 JSON（含 access/refresh token 明文，注意保管）">导出</button>
           <button class="xs" id="btnCheckinAll">全部签到</button>
           <button class="xs" id="btnTravelAll">旅行巡检</button>
