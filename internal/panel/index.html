@@ -747,7 +747,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
      整表还比容器宽 80px 需要横向滚动。给每列定宽后，User-Agent 吃剩余空间。 */
   /* 列宽按比例固定，但整表有 1100px 下限：十列要放完整的时间/模型/请求 ID，
      900px 装不下（时间、IP、请求 ID 都会被切）。窄窗口就横向滚动，不截断。 */
-  .acc.req { table-layout: fixed; width: 100%; min-width: 1100px; }
+  .acc.req { table-layout: fixed; width: 100%; min-width: 1200px; }
   .acc.req td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acc.req td .clip { display: inline-block; max-width: 100%; vertical-align: middle; }
   /* 徽标是 inline-flex，默认贴在文字基线上，会把行高从 39px 顶到 59px */
@@ -755,7 +755,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* 请求指标是 6 张卡：默认 flex 基准会让第 6 张单独落到第二行、还撑成整行宽，
      看着像「排版不均」。这里收窄基准，让 6 张在常见宽度下排成一行。 */
   #reqStats > .stat { flex: 1 1 140px; }
-  .acc.req th, .acc.req td { padding: 8px 10px; }
+  /* 列间距加大一档：10px 时相邻两列的文字几乎贴着，看不清属于哪一列 */
+  .acc.req th, .acc.req td { padding: 8px 14px; }
   .acc.req tbody tr { cursor: default; }
   /* 请求记录最多可读 1000 条，不限高会把下面的「运行日志」推到很远的地方。
      限高 + 表头吸顶：滚动区域内始终能看到列名。 */
@@ -2173,9 +2174,9 @@ input::placeholder { color: var(--ink-3); }
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <colgroup>
-              <col style="width:8%"><col style="width:10%"><col style="width:16%"><col style="width:8%">
-              <col style="width:12%"><col style="width:12%">
-              <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:17%">
+              <col style="width:8%"><col style="width:13%"><col style="width:16%"><col style="width:8%">
+              <col style="width:11%"><col style="width:12%">
+              <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:15%">
             </colgroup>
             <thead><tr>
               <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
