@@ -1116,6 +1116,14 @@ input::placeholder { color: var(--ink-3); }
     column-rule: 1px solid var(--line-soft);
   }
 }
+
+/* 积分扣除历史：5 张指标卡自适应，不再落单换行 */
+#usCreditStats { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+/* 积分构成：账号对比里的上游错误详情过长，最多显示 5 行，避免撑高整块 */
+.pk-card .err {
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
 </style>
 </head>
 <body>
@@ -1515,7 +1523,7 @@ input::placeholder { color: var(--ink-3); }
               <th class="num">请求</th><th class="num">Prompt</th><th class="num">Completion</th>
               <th class="num">合计</th><th class="num">积分</th><th class="num">token/积分</th>
             </tr></thead>
-            <tbody id="usHourBody"></tbody>
+            <tbody id="usHourBody"><tr><td colspan="8"><div class="empty" style="padding:22px 12px">暂无按小时数据 —— 有请求产生后按整点聚合显示</div></td></tr></tbody>
           </table>
         </div>
       </div>
