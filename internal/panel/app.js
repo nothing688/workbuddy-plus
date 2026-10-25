@@ -1712,7 +1712,9 @@ function logLevel(text) {
 
 async function loadLogs() {
   const box = $('logBox');
-  const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
+  // 双栏布局后滚动发生在外层 .log-wrap（#logBox 自身不再滚动）；单栏时回落到自身。
+  const sc = $('logWrap') || box;
+  const atEnd = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 24;
   const limit = ($('reqLimit') && $('reqLimit').value) || 100;
   // 时间范围由归档侧过滤（不是前端筛已拉取的条目）：区间落在更早的时间段时，
   // 「最近 N 条」里根本不会有那些记录，必须让服务端按时间取。
@@ -1741,7 +1743,7 @@ async function loadLogs() {
         return '<span class="ln' + lvl + '">' + ch + esc(t + ' ' + e.text) + '</span>';
       }).join('')
       : '<span style="color:var(--ink-3)">暂无日志</span>';
-    if (logPin && atEnd) box.scrollTop = box.scrollHeight;
+    if (logPin && atEnd) sc.scrollTop = sc.scrollHeight;
     const counts = {};
     for (const e of (d.entries || [])) counts[e.ch] = (counts[e.ch] || 0) + 1;
     $('logNote').textContent = logCh === 'all'

@@ -1106,6 +1106,16 @@ input::placeholder { color: var(--ink-3); }
     max-height: 92vh; border-radius: 16px;
   }
 }
+
+/* 运行日志：宽屏双栏流，充分利用右侧空白；滚动交给外层容器 */
+.log-wrap { max-height: 460px; overflow: auto; }
+#logBox { max-height: none; overflow: visible; }
+@media (min-width: 1240px) {
+  #logBox {
+    columns: 2; column-gap: 34px;
+    column-rule: 1px solid var(--line-soft);
+  }
+}
 </style>
 </head>
 <body>
@@ -1966,7 +1976,7 @@ input::placeholder { color: var(--ink-3); }
           <span class="note" id="logNote">每频道最近 500 行；任务日志可跨重启查询</span>
           <button class="xs" id="btnLogPin">自动滚动：开</button>
         </header>
-        <pre id="logBox"></pre>
+        <div class="log-wrap" id="logWrap"><pre id="logBox"></pre></div>
       </div>
 
       <div class="box">
