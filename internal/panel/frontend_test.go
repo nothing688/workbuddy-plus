@@ -987,23 +987,21 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
-func TestLogoutWired(t *testing.T) {
+// 面板不提供登出入口（用户要求）：界面上不该出现登出按钮；旧绑定必须做存在性判断，
+// 否则删掉元素后 app.js 顶层会因 null.onclick 抛错、后续初始化全部中断。
+func TestLogoutRemoved(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
-	if !strings.Contains(rec.Body.String(), `id="btnLogout"`) {
-		t.Error(`index.html 缺少登出按钮 id="btnLogout"`)
+	if strings.Contains(rec.Body.String(), `id="btnLogout"`) {
+		t.Error(`index.html 仍有登出按钮 id="btnLogout"`)
 	}
 	js, err := os.ReadFile("app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(js)
-	if !strings.Contains(src, "$('btnLogout')") {
-		t.Error("app.js 未绑定 $('btnLogout')：按钮点了不会有反应")
-	}
-	if !strings.Contains(src, "localStorage.removeItem(LS_KEY)") {
-		t.Error("登出必须清掉本地密钥（LS_KEY），否则刷新后仍免密进入面板")
+	if strings.Contains(string(js), "btnLogout") {
+		t.Error("app.js 仍然引用已移除的 btnLogout")
 	}
 }
 
