@@ -1,0 +1,8 @@
+# GHCR 镜像源覆盖：与 docker-compose.prod.yml 组合使用
+#   docker login ghcr.io -u <账号> -p <PAT（read:packages）>
+#   docker compose -f docker-compose.prod.yml -f docker-compose.ghcr.yml up -d
+#
+# 默认 prod 文件拉 CNB 制品库；这里只把镜像地址换成 GitHub Actions 推送的 GHCR。
+services:
+  wb2api:
+    image: ghcr.io/nothing688/workbuddy-plus:latest

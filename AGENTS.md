@@ -53,3 +53,6 @@ docker compose -f docker-compose.prod.yml up -d
 
 之后 watchtower 每 5 分钟检查 `latest`，有更新自动拉取重建。想手动更新：
 `docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d`。
+
+GitHub 镜像源（Actions 推送 `ghcr.io/nothing688/workbuddy-plus`）用覆盖文件组合：
+`docker compose -f docker-compose.prod.yml -f docker-compose.ghcr.yml up -d`。
