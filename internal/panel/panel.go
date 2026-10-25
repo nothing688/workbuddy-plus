@@ -80,6 +80,16 @@ type Config struct {
 	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
 	// 只读展示：网关不解析、不依赖其内容做任何路由/出站决策。
 	ProbeFile string
+
+	// SelfUpdate 「GitHub 热更新」配置（默认关闭）。
+	SelfUpdate SelfUpdateConfig
+	// DataDir 数据目录：热更新的二进制落在 <DataDir>/updates（必须可写且在卷上，
+	// 否则容器重建会丢）。
+	DataDir string
+	// ExecSelf 替换当前进程镜像（测试注入用；nil = selfupdate.Exec）。
+	ExecSelf func(path string, args []string) error
+	// HTTPClient 热更新的 HTTP 客户端（测试注入 TLS 客户端；nil = 默认客户端）。
+	HTTPClient *http.Client
 	// Balance 余额趋势采样记录器（nil = 该视图返回 501）
 	Balance *balance.Recorder
 	// ModelFallback 模型降级路由表（读 live 快照，支持热更）。nil = 未配置。
@@ -204,6 +214,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/theme.js", p.themeScript)
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
+	// GitHub 热更新：check 只读（查 Release / 比版本），apply 下载并替换自身。
+	p.mux.HandleFunc("GET /panel/api/selfupdate/check", p.withAuth(p.selfUpdateCheck))
+	p.mux.HandleFunc("POST /panel/api/selfupdate/apply", p.withAuth(p.selfUpdateApply))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))
 	p.mux.HandleFunc("GET /panel/api/error_summary", p.withAuth(p.errorSummary))
 	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuth(p.requestMetrics))

@@ -32,6 +32,7 @@ import (
 	"github.com/misakano7545/workbuddy2api-panel/internal/reqlog"
 	"github.com/misakano7545/workbuddy2api-panel/internal/safefile"
 	"github.com/misakano7545/workbuddy2api-panel/internal/scheduler"
+	"github.com/misakano7545/workbuddy2api-panel/internal/selfupdate"
 	"github.com/misakano7545/workbuddy2api-panel/internal/server"
 	"github.com/misakano7545/workbuddy2api-panel/internal/session"
 	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
@@ -375,6 +376,16 @@ func main() {
 	up.SetCreditObserver(creditHist.Observe)
 	log.Printf("[credithist] 积分历史已启用: %s", stateSibling(cfg.StateFile, "credit-history.json"))
 
+	// 热更新优先：数据卷里若装了比镜像更新的版本，直接换过去再启动。镜像追平/超过
+	// 后 PreferPath 返回空，自动回落到镜像版本，不会永远卡在旧的热更新上。
+	dataDir := filepath.Dir(cfg.StateFile)
+	if bin, st := selfupdate.PreferPath(dataDir, appVersion); bin != "" {
+		log.Printf("[selfupdate] 数据卷里有更新版本 %s（%s），切换到 %s", st.Version, st.Tag, bin)
+		if err := selfupdate.Exec(bin, os.Args[1:]); err != nil {
+			log.Printf("[selfupdate] 切换失败，继续用当前版本：%v", err)
+		}
+	}
+
 	var pn *panel.Panel
 	pn = panel.New(panel.Config{
 		Pool:       p,
@@ -402,7 +413,10 @@ func main() {
 		Live: live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
-		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
+		ProbeFile: stateSibling(cfg.StateFile, "output_probes.json"),
+		// 热更新：二进制落在数据卷（<DataDir>/updates），配置来自 panel.self_update。
+		DataDir:    dataDir,
+		SelfUpdate: cfg.Panel.SelfUpdate,
 		ConfigPath: *cfgPath,
 		LoadConfig: func() (any, error) {
 			return Load(*cfgPath)

@@ -5810,6 +5810,7 @@ function upSchedule(ms) {
 /* 进入维护页：只拉一次状态，绝不自动触发同步。 */
 async function loadMaint() {
   upStopPoll();
+  checkSelfUpdate(true); // 静默查一次 Release：失败不打断上游同步那块的状态
   try {
     const st = await api('upstream/status');
     renderUpstream(st);
@@ -5821,6 +5822,84 @@ async function loadMaint() {
     $('btnUpstreamSync').disabled = true;
   }
 }
+
+/* ── GitHub 热更新 ────────────────────────────────────────────────
+   只认 config 里 panel.self_update 配的那个仓库。服务端负责下载 / sha256 校验 /
+   原子落盘 / exec 换进程；前端只展示状态和点按钮，不做任何「拉代码」的动作
+   （镜像里没有 git/go，拉源码编译这条路不存在）。 */
+let suData = null;
+
+function renderSelfUpdate(d) {
+  suData = d || null;
+  const enabled = !!(d && d.enabled);
+  const state = $('suState');
+  $('suMode').textContent = enabled ? (d.repo || 'GitHub') : '未启用';
+  $('suCurrent').textContent = '当前版本 ' + ((d && d.current) || '—');
+  $('suLatest').textContent = d && d.latest_version ? '最新版本 ' + d.latest_version : '最新版本 —';
+  $('suAt').textContent = d && d.published_at ? '发布于 ' + fmtLocalDateTime(d.published_at) : '发布时间 —';
+  $('suOut').hidden = true;
+  $('btnSuApply').disabled = true;
+  if (!enabled) {
+    state.className = 'tag mute'; state.textContent = '未启用';
+    $('suDesc').textContent = (d && d.reason) || '在 config.json 打开 panel.self_update.enabled 后重启';
+    $('btnSuCheck').disabled = true;
+    return;
+  }
+  $('btnSuCheck').disabled = false;
+  if (d.update_available) {
+    state.className = 'tag warn'; state.textContent = '有新版本';
+    $('suDesc').textContent = '可更新到 ' + d.latest_version +
+      (d.asset && d.asset.has_digest ? '（Release 带 sha256 校验）' : '（该 Release 没有校验和，仅靠 HTTPS 传输）');
+    const notes = (d.notes || '').trim();
+    if (notes) { $('suOut').hidden = false; $('suOut').textContent = notes; $('suOut').classList.remove('bad'); }
+    $('btnSuApply').disabled = false;
+    return;
+  }
+  state.className = d.reason ? 'tag mute' : 'tag ok';
+  state.textContent = d.reason ? '无法确认' : '已是最新';
+  $('suDesc').textContent = d.reason || '当前就是最新版本';
+}
+
+async function checkSelfUpdate(silent) {
+  if (!silent) {
+    $('btnSuCheck').disabled = true;
+    $('suState').className = 'tag mute';
+    $('suState').textContent = '检查中…';
+  }
+  try {
+    renderSelfUpdate(await api('selfupdate/check'));
+  } catch (e) {
+    if (silent) return;
+    $('suState').className = 'tag bad';
+    $('suState').textContent = '检查失败';
+    $('suDesc').textContent = e.message || String(e);
+    $('btnSuCheck').disabled = false;
+  }
+}
+
+$('btnSuCheck').onclick = () => checkSelfUpdate(false);
+
+$('btnSuApply').onclick = async () => {
+  if (!suData || !suData.update_available) return;
+  const v = suData.latest_version;
+  if (!confirm('下载并替换当前运行的二进制（' + v + '）？\n进程会立即重启，期间几秒不可用。')) return;
+  const btn = $('btnSuApply');
+  btn.disabled = true; btn.textContent = '更新中…';
+  $('suState').className = 'tag warn'; $('suState').textContent = '下载中';
+  $('suDesc').textContent = '正在下载并校验 ' + v + '…';
+  try {
+    const r = await api('selfupdate/apply', { method: 'POST' });
+    $('suState').className = 'tag ok'; $('suState').textContent = '已更新';
+    $('suDesc').textContent = '已安装 ' + r.version +
+      (r.verified ? '（sha256 已校验）' : '（该 Release 未提供校验和）') +
+      '，进程正在重启，稍后本页会自动刷新…';
+    setTimeout(() => location.reload(), 5000);
+  } catch (e) {
+    $('suState').className = 'tag bad'; $('suState').textContent = '更新失败';
+    $('suDesc').textContent = e.message || String(e);
+    btn.disabled = false; btn.textContent = '立即更新';
+  }
+};
 
 $('btnUpstreamSync').onclick = async () => {
   const btn = $('btnUpstreamSync');

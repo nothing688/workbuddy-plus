@@ -43,6 +43,9 @@ type Config struct {
 		// 无 git/源码树）；local 模式在源码检出里直接跑同步脚本。字段定义与
 		// 面板共用 panel.UpstreamSyncConfig，避免两处 JSON 名漂移。
 		UpstreamSync panel.UpstreamSyncConfig `json:"upstream_sync"`
+		// SelfUpdate 面板「GitHub 热更新」：下载自己的 Release 二进制替换运行中的
+		// 进程。默认关闭——这是能换掉自身代码的能力，不该开箱即用。
+		SelfUpdate panel.SelfUpdateConfig `json:"self_update"`
 	} `json:"panel"`
 
 	Logging struct {
@@ -427,6 +430,13 @@ func Default() *Config {
 	c.Panel.PackageDetailLimit = 5
 	// 一键同步上游：默认关闭；cnb 模式的 event/branch/api_base 与 local 模式的
 	// workdir/command 都给推荐值，用户只需打开开关并配 repo + token。
+	// 热更新：默认关闭、默认指向本仓 GitHub 镜像；token 留空（公开仓库够用，
+	// 私有仓库/提高限额时才填）。
+	c.Panel.SelfUpdate = panel.SelfUpdateConfig{
+		Enabled: false,
+		Repo:    "nothing688/workbuddy-plus",
+		APIBase: "https://api.github.com",
+	}
 	c.Panel.UpstreamSync = panel.UpstreamSyncConfig{
 		Mode:    "cnb",
 		Event:   "api_trigger_sync_upstream",

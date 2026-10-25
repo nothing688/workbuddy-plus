@@ -918,6 +918,30 @@ completion 的七到九成。
 
 账号 / 数据通过 `docker-compose.yml` 卷挂载持久化：`./auths`、`./data`、`./config.json`。
 
+### GitHub 热更新（可选，默认关闭）
+
+面板「维护 → GitHub 热更新」可以直接下载自己仓库的 Release 二进制替换运行中的进程，
+不必等镜像重建。镜像里没有 git / Go 工具链，所以**只更新发布产物，不拉源码编译**。
+
+```json
+"panel": {
+  "self_update": {
+    "enabled": true,
+    "repo": "nothing688/workbuddy-plus",
+    "token": "",
+    "api_base": "https://api.github.com"
+  }
+}
+```
+
+- 资产名按 `wb2api-panel-<version>-<goos>-<goarch>.zip` 匹配（CI 的 `binaries.yml` 产出）；
+  只认 `v*` 标签的正式 Release，没有 Release 时面板会说明原因
+- 下载后先校验 Release 的 `sha256` digest（有才校验；GitHub 2025 起提供），
+  校验不过不会落盘，正在跑的二进制不受影响
+- 新版本写到 `<state_file 同目录>/updates/`（数据卷），再 `exec` 换进程：PID 不变、
+  容器不重启；容器重建后启动逻辑会自动优先更高版本，镜像版本追平后自动回落
+- 默认关闭：这是「能换掉自己代码」的能力，公网实例务必先确认 `api_key` 已设置
+
 ### 工具脚本
 
 | 脚本 | 用途 |

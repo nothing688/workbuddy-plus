@@ -2067,6 +2067,28 @@ input::placeholder { color: var(--ink-3); }
           <pre id="upOut"></pre>
         </div>
       </div>
+
+      <!-- GitHub 热更新：下载自己仓库的最新 Release 二进制替换当前进程。
+           镜像里没有 git/go，拉源码编译不成立；能自更新的只有发布产物本身。 -->
+      <div class="box">
+        <header>
+          <h3>GitHub 热更新 <span class="hint">下载最新 Release 的二进制并重启进程</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="suMode">—</span>
+          <button class="xs" id="btnSuCheck">检查更新</button>
+          <button class="xs primary" id="btnSuApply" disabled>立即更新</button>
+        </header>
+        <div class="pad">
+          <div class="up-bar">
+            <span class="tag mute" id="suState">未检查</span>
+            <span class="hint" id="suCurrent">当前版本 —</span>
+            <span class="hint" id="suLatest">最新版本 —</span>
+            <span class="hint" id="suAt">发布时间 —</span>
+          </div>
+          <p class="up-desc" id="suDesc">点击「检查更新」查询 GitHub Release。</p>
+          <pre id="suOut" hidden></pre>
+        </div>
+      </div>
     </section>
 
     <!-- 日志 -->

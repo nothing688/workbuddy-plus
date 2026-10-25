@@ -20,6 +20,12 @@
       "workdir": ".",
       "command": "bash scripts/sync_upstream.sh --auto",
       "timeout": "10m"
+    },
+    "self_update": {
+      "enabled": false,
+      "repo": "nothing688/workbuddy-plus",
+      "token": "",
+      "api_base": "https://api.github.com"
     }
   },
   "logging": {

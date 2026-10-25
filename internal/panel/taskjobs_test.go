@@ -362,7 +362,9 @@ func TestResumedJobDoesNotClaimPreviouslyClaimedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.ResumeTaskJobs()
-	deadline := time.Now().Add(5 * time.Second)
+	// 5s 在全量跑（同包并行/机器忙）时太紧，实测约四成概率还没跑完就超时；
+	// 这是等待任务落盘的时间上限，放宽不影响断言本身。
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		job, ok := p.GetTaskJob(uid)
 		if ok && job.Status == "finished" {
