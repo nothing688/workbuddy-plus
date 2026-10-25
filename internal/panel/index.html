@@ -1170,6 +1170,52 @@ input::placeholder { color: var(--ink-3); }
 .who .id { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .who .id .grp-badge { flex: none; }
 .acc th:nth-child(8), .acc td:nth-child(8) { min-width: 202px; } /* 用量让出一点宽度 */
+
+/* 窄屏：账号表改成卡片式，名称/状态/指标/按钮分行，避免挤成一条 */
+@media (max-width: 760px) {
+  #view-accounts .tbl-wrap { overflow: visible; }
+  #view-accounts table.acc { display: block; width: 100%; min-width: 0; }
+  #view-accounts table.acc thead { display: none; }
+  #view-accounts table.acc tbody { display: flex; flex-direction: column; gap: 10px; padding: 10px; }
+  #view-accounts table.acc tr {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
+    padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--surface); border-left: 3px solid var(--ok);
+  }
+  #view-accounts table.acc tr.cool { border-left-color: var(--warn); }
+  #view-accounts table.acc tr.off { border-left-color: var(--bad); }
+  #view-accounts table.acc td { display: block; border: 0; padding: 0; min-width: 0; }
+  #view-accounts table.acc td.pick, #view-accounts table.acc td.mark { display: none; }
+  #view-accounts table.acc td.who { grid-column: 1 / -1; max-width: none; }
+  #view-accounts table.acc td[data-label="状态"] { grid-column: 1 / -1; white-space: normal; word-break: break-word; }
+  #view-accounts table.acc td[data-label="用量"] { grid-column: 1 / -1; }
+  #view-accounts table.acc td.acts { grid-column: 1 / -1; text-align: left; }
+  #view-accounts .acts-inner { flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
+  #view-accounts table.acc td[data-label]:not([data-label="状态"])::before {
+    content: attr(data-label); display: block; margin-bottom: 2px;
+    font-size: 10.5px; color: var(--ink-3); font-weight: 500;
+  }
+  /* 测试结果行：跟随卡片，不加边框 */
+  #view-accounts table.acc tr.probe-row {
+    display: block; border: 0; background: transparent; padding: 0 4px;
+  }
+  #view-accounts table.acc tr.probe-row td { display: block; }
+}
+
+/* 窄屏操作按钮：横向换行排列（覆盖桌面端的固定槽位/网格规则） */
+@media (max-width: 760px) {
+  #view-accounts .acts-inner {
+    display: flex; flex-direction: row; flex-wrap: wrap;
+    justify-content: flex-start; gap: 6px; grid-template-columns: none;
+  }
+  #view-accounts .acts-inner button { width: auto; flex: none; padding: 0 12px; }
+}
+
+/* 窄屏卡片里操作列要占满宽度（桌面用 width:1px 收窄列宽，卡片布局下会失效） */
+@media (max-width: 760px) {
+  #view-accounts table.acc td.acts { width: auto; white-space: normal; }
+  #view-accounts .acts-inner { width: 100%; }
+}
 </style>
 </head>
 <body>

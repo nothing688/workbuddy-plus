@@ -579,11 +579,8 @@ function renderAccounts(list, filtered, probe) {
     const parked = !!s.group_parked && !!s.disabled;
     const prevGrp = String(s.prev_group == null ? '' : s.prev_group);
     const noteText = String(s.note == null ? '' : s.note);
-    const grpCell = parked
-      ? '<button class="grp-badge parked" data-a="movegroup" data-u="' + esc(s.uid) +
-        '" title="' + esc(prevGrp
-          ? '已禁用（原分组 ' + prevGrp + '，恢复后自动回归）'
-          : '已禁用（原为未分组）') + '">已禁用</button>'
+    // parked 时状态标签已经写了「已禁用」，分组徽章再写一遍是重复信息，直接不渲染。
+    const grpCell = parked ? ''
       : '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
         '" title="' + esc(grp ? '分组：' + grp + '（点击移动到其他组）' : '未分组（点击入组）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
     const nickHtml = s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>';
@@ -613,17 +610,17 @@ function renderAccounts(list, filtered, probe) {
         (picked ? ' checked' : '') + ' title="选择该账号（可批量移动分组）" aria-label="选择该账号"></td>' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
       '<td class="who"><div class="nm">' + nameCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + ' ' + grpCell + '</div></td>' +
-      '<td>' + tag + note + rateLimits + '</td>' +
-      '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
-      '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
-      '<td class="num">' + (s.in_flight || 0) + '</td>' +
-      '<td class="num usage-cell" title="' + esc(usageTitle) + '"><span class="usage-line" aria-label="' + esc(usageTitle) + '">' +
+      '<td data-label="状态">' + tag + note + rateLimits + '</td>' +
+      '<td class="cred" data-label="积分" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
+      '<td class="num" data-label="成功 / 失败">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
+      '<td class="num" data-label="在途">' + (s.in_flight || 0) + '</td>' +
+      '<td class="num usage-cell" data-label="用量" title="' + esc(usageTitle) + '"><span class="usage-line" aria-label="' + esc(usageTitle) + '">' +
         '<span class="usage-item usage-count"><b>' + req + '</b><em>次</em></span>' +
         '<span class="usage-item usage-total"><b>' + totalTok + '</b>' + totalTokUnit + '</span>' +
         '<span class="usage-item usage-latency"><b>' + latency + '</b></span>' +
         '<span class="usage-item usage-rate"><b>' + rate + '</b></span>' +
       '</span></td>' +
-      '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
+      '<td class="num" data-label="最近成功" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts"><div class="acts-inner">' + [
         // 恢复原版按钮集合：签到 / 余额 / 任务 / 测试 / 选号状态 / 禁用 / 移除。
         // 两行四列排布（.acts-inner），宽度与「3+更多」相当，但每个动作都是一级入口。
