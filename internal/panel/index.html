@@ -746,11 +746,228 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .fl-dim { opacity: .62; }
 .fl-zero { color: var(--ink-3); }
 .fl-na { color: var(--ink-3); }
-  .bh-daylegend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-  .bh-daylegend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  .bh-daylegend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .bh-daylegend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
   .bh-daylegend .lg-key { display: inline-flex; align-items: center; }
   .bh-daylegend .lg-sep { width: 1px; height: 12px; background: var(--line); }
   .bh-daylegend .lg-order { color: var(--ink-3); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   UI 2.0 · 视觉与可用性升级层
+   只重定义样式与布局节奏，不改任何 DOM/ID/交互逻辑；原有规则作兜底保留。
+   ═══════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #0a0c12;
+  --surface: #11141c;
+  --surface-2: #161a24;
+  --raise: #1d2230;
+  --line: #232a39;
+  --line-soft: #1a1f2b;
+  --ink: #eef2f9;
+  --ink-2: #a7b0c3;
+  --ink-3: #6e7a91;
+  --accent: #5a7cff;
+  --accent-soft: rgba(90, 124, 255, .14);
+  --ok: #3fd6a0; --ok-soft: rgba(63, 214, 160, .12);
+  --warn: #f0b23f; --warn-soft: rgba(240, 178, 63, .12);
+  --bad: #f0665f; --bad-soft: rgba(240, 102, 95, .12);
+  --radius-sm: 8px; --radius: 12px; --radius-lg: 16px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-2: 0 18px 44px -18px rgba(0, 0, 0, .6);
+  --ring: 0 0 0 3px rgba(90, 124, 255, .22);
+  --topbar-h: 56px;
+}
+[data-theme="light"] {
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #f7f9fd;
+  --raise: #ffffff;
+  --line: #e2e7f0;
+  --line-soft: #edf1f7;
+  --ink: #12151d;
+  --ink-2: #4f586b;
+  --ink-3: #7d8799;
+  --accent: #3f5fe8;
+  --accent-soft: rgba(63, 95, 232, .10);
+  --ok: #0f9d63; --ok-soft: rgba(15, 157, 99, .10);
+  --warn: #a86a08; --warn-soft: rgba(168, 106, 8, .11);
+  --bad: #cf3b34; --bad-soft: rgba(207, 59, 52, .09);
+  --shadow-1: 0 1px 2px rgba(16, 20, 32, .05);
+  --shadow-2: 0 20px 44px -20px rgba(16, 20, 32, .22);
+  --ring: 0 0 0 3px rgba(63, 95, 232, .18);
+}
+html { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+body {
+  font-size: 13.5px;
+  letter-spacing: .004em;
+  background:
+    radial-gradient(1100px 500px at 78% -12%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* ── 壳层：更宽的导航、更克制的主区留白 ─────────────────────────── */
+@media (min-width: 761px) {
+  .shell { grid-template-columns: 224px minmax(0, 1fr); }
+  .view { max-width: 1560px; margin: 0 auto; padding: 24px 28px 88px; }
+}
+.nav {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px; }
+.brand::before {
+  content: ""; flex: none; width: 26px; height: 26px; border-radius: 8px;
+  background: linear-gradient(140deg, var(--accent), #8a6cff 85%);
+  box-shadow: 0 6px 16px -8px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .28);
+}
+.brand .name { font-size: 14.5px; font-weight: 650; }
+.brand .sub { font-size: 11px; letter-spacing: .02em; }
+.nav ul { padding: 12px 10px; }
+.nav a {
+  position: relative; height: 36px; padding: 0 12px; border-radius: 9px;
+  font-size: 13px; transition: background .14s, color .14s;
+}
+.nav a:hover { background: var(--surface-2); }
+.nav a.on { background: var(--accent-soft); color: var(--accent); }
+.nav a.on::before {
+  content: ""; position: absolute; left: -10px; top: 9px; bottom: 9px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.nav a svg { width: 16px; height: 16px; opacity: .9; }
+.nav .sig { padding: 12px 16px 14px; line-height: 1.7; }
+
+/* ── 顶栏：毛玻璃 + 更轻的边框 ──────────────────────────────────── */
+.topbar {
+  gap: 12px;
+  background: color-mix(in srgb, var(--bg) 76%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  border-bottom: 1px solid var(--line-soft);
+}
+@media (min-width: 761px) {
+  .topbar { height: var(--topbar-h); padding: 0 24px; }
+}
+@media (max-width: 760px) {
+  .topbar { height: auto; }
+}
+.topbar h2 { font-size: 16px; font-weight: 650; }
+.topbar .meta { font-size: 11.5px; }
+.topbar .icon { border-color: transparent; background: transparent; }
+.topbar .icon:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line); }
+
+/* ── 统计区：独立卡片，不再是一整条表格 ─────────────────────────── */
+.stats {
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 12px; border: 0; background: transparent; box-shadow: none;
+  overflow: visible; margin-bottom: 18px;
+}
+.stat, .stats .st {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); padding: 14px 16px; box-shadow: var(--shadow-1);
+  transition: border-color .16s, transform .16s;
+}
+.stat:hover, .stats .st:hover { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); }
+.stat .v, .stats .st .v { font-size: 23px; font-weight: 650; letter-spacing: -.02em; }
+.stat .k, .stats .st .k { font-size: 11.5px; margin-top: 6px; color: var(--ink-3); }
+
+/* ── 面板块：更软的圆角与头部层次 ───────────────────────────────── */
+.box {
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-1);
+  margin-bottom: 18px; transition: box-shadow .18s;
+}
+.box:hover { box-shadow: var(--shadow-2); }
+.box > header {
+  padding: 13px 18px; gap: 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 60%, transparent), transparent);
+}
+.box > header h3 { font-size: 13.5px; font-weight: 620; letter-spacing: .01em; }
+.box > header h3 .hint { font-size: 11.5px; }
+.box .pad { padding: 18px; }
+
+/* ── 表格：更紧凑的行高、清晰的表头、偶数行轻底 ─────────────────── */
+.acc th {
+  font-size: 11px; letter-spacing: .04em; font-weight: 600;
+  color: var(--ink-3); padding: 10px 11px;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+  border-bottom: 1px solid var(--line);
+}
+.acc td { padding: 10px 11px; }
+.acc tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
+.acc tbody tr:hover { background: var(--surface-2); }
+.acc tr.sel, .acc tbody tr.sel { background: var(--accent-soft); }
+.acc .who .nm { font-weight: 600; }
+.acc .who .id { font-size: 11px; letter-spacing: .01em; }
+
+/* ── 控件：统一高度与手感 ───────────────────────────────────────── */
+button {
+  border-radius: var(--radius-sm); font-weight: 500;
+  transition: border-color .14s, background .14s, box-shadow .14s, transform .08s;
+}
+button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+}
+button:active:not(:disabled) { transform: translateY(1px); }
+button.primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, #fff 10%), var(--accent));
+  border-color: transparent; color: var(--accent-ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 8px 18px -12px var(--accent);
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.06); background: var(--accent); }
+button.ghost { background: transparent; }
+button.ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+button.icon { border-radius: var(--radius-sm); }
+input, select, textarea {
+  border-radius: var(--radius-sm); padding: 7px 11px; background: var(--surface);
+  transition: border-color .14s, box-shadow .14s;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: var(--ring);
+}
+input::placeholder { color: var(--ink-3); }
+
+/* ── 标签 / 徽章：统一胶囊与内描边 ─────────────────────────────── */
+.tag { padding: 2px 9px; font-weight: 550; letter-spacing: .01em; }
+.tag.ok { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 16%, transparent); }
+.tag.warn { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 16%, transparent); }
+.tag.bad { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 16%, transparent); }
+.grp-badge { border-radius: 7px; padding: 1px 8px; font-weight: 550; }
+
+/* ── 弹窗：更大的圆角、分层阴影、背景模糊 ─────────────────────── */
+.veil { background: rgba(5, 7, 12, .58); backdrop-filter: blur(6px); }
+.dlg {
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-2);
+  border-color: color-mix(in srgb, var(--line) 80%, transparent);
+  animation: dlgIn .16s ease-out;
+}
+@keyframes dlgIn { from { opacity: 0; transform: translateY(6px) scale(.99); } to { opacity: 1; transform: none; } }
+.dlg header { padding: 18px 22px 14px; }
+.dlg header h3 { font-size: 15.5px; font-weight: 650; }
+.dlg .body { padding: 18px 22px; }
+.dlg footer { padding: 14px 22px; background: color-mix(in srgb, var(--surface-2) 50%, transparent); }
+
+/* ── Toast：右下角卡片 ─────────────────────────────────────────── */
+.tst { border-radius: 10px; padding: 11px 15px; box-shadow: var(--shadow-2); }
+
+/* ── 滚动条 / 选中 / 空态 ──────────────────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ink-3) 35%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink-2) 55%, transparent); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+.empty { padding: 46px 20px; }
+.empty .big { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+
+/* 视图切换的轻微入场，避免内容硬切 */
+.view:not([hidden]) { animation: viewIn .18s ease-out; }
+@keyframes viewIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (max-width: 760px) {
+  .view { padding: 14px 12px 64px; }
+  .stats { gap: 8px; }
+  .stat, .stats .st { padding: 12px 13px; border-radius: 10px; }
+  .stat .v, .stats .st .v { font-size: 20px; }
+  .box { border-radius: 12px; }
+}
 </style>
 </head>
 <body>
