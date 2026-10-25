@@ -132,6 +132,12 @@ func (p *Panel) selfUpdateApply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "未配置数据目录，无法落地新版本")
 		return
 	}
+	// 无鉴权的面板等于把「换掉自己」开放给任何能访问 7863 的人；这条闸比 enabled 更硬，
+	// 默认启用之后它就是唯一的兜底。
+	if p.apiKey() == "" {
+		writeErr(w, http.StatusForbidden, "面板未设置 api_key：拒绝在无鉴权环境下替换二进制")
+		return
+	}
 	rel, err := p.fetchLatestRelease(cfg)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "查询 Release 失败："+err.Error())

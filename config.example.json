@@ -22,7 +22,7 @@
       "timeout": "10m"
     },
     "self_update": {
-      "enabled": false,
+      "enabled": true,
       "repo": "nothing688/workbuddy-plus",
       "token": "",
       "api_base": "https://api.github.com"

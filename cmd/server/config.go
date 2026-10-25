@@ -433,7 +433,7 @@ func Default() *Config {
 	// 热更新：默认关闭、默认指向本仓 GitHub 镜像；token 留空（公开仓库够用，
 	// 私有仓库/提高限额时才填）。
 	c.Panel.SelfUpdate = panel.SelfUpdateConfig{
-		Enabled: false,
+		Enabled: true,
 		Repo:    "nothing688/workbuddy-plus",
 		APIBase: "https://api.github.com",
 	}

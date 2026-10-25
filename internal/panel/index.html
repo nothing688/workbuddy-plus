@@ -419,7 +419,7 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 #reqSummary { flex: 1 1 320px; }
 #reqNote { flex: 0 1 260px; text-align: right; }
 
-/* ── 维护 · 上游同步 ─────────────────────────────────────────────── */
+/* ── 维护页共用：状态条与输出块 ───────────────────────────────────── */
 #view-maint .up-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
 #view-maint .up-bar .hint { font-size: 12px; color: var(--ink-3); }
 #view-maint .up-desc { margin: 0 0 2px; font-size: 12px; line-height: 1.6; color: var(--ink-3); }
@@ -2057,24 +2057,6 @@ input::placeholder { color: var(--ink-3); }
 
     <!-- 维护 -->
     <section class="view" id="view-maint" hidden>
-      <div class="box">
-        <header>
-          <h3>上游同步 <span class="hint">合并两个上游快照项目并刷新基线</span></h3>
-          <span class="grow"></span>
-          <span class="note" id="upMode">—</span>
-          <button class="xs primary" id="btnUpstreamSync" disabled>立即同步</button>
-        </header>
-        <div class="pad">
-          <div class="up-bar">
-            <span class="tag mute" id="upState">空闲</span>
-            <span class="hint" id="upStartedAt">开始时间 —</span>
-            <span class="hint" id="upBuild">构建号 —</span>
-          </div>
-          <p class="up-desc" id="upDesc">正在读取同步状态…</p>
-          <pre id="upOut"></pre>
-        </div>
-      </div>
-
       <!-- GitHub 热更新：下载自己仓库的最新 Release 二进制替换当前进程。
            镜像里没有 git/go，拉源码编译不成立；能自更新的只有发布产物本身。 -->
       <div class="box">

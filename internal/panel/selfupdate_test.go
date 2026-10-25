@@ -204,3 +204,17 @@ func TestSelfUpdateDisabled(t *testing.T) {
 		t.Fatalf("code=%d want 403", rec.Code)
 	}
 }
+
+// TestSelfUpdateApplyRequiresAPIKey 默认启用之后，api_key 就是唯一兜底：
+// 无鉴权的面板（本机/内网裸跑）不允许对外的请求替换二进制。
+func TestSelfUpdateApplyRequiresAPIKey(t *testing.T) {
+	zipBytes := buildReleaseZip(t, "BIN")
+	pn, _, _ := newSelfUpdatePanel(t, "2026.10.1.1000", zipBytes, "")
+	pn.cfg.APIKey = ""
+	req := httptest.NewRequest("POST", "/panel/api/selfupdate/apply", nil)
+	rec := httptest.NewRecorder()
+	pn.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "api_key") {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
