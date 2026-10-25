@@ -1090,6 +1090,12 @@ input::placeholder { color: var(--ink-3); }
   .topbar { flex-wrap: nowrap; overflow: hidden; }
   .topbar #btnAdd { margin-left: auto; }
 }
+
+/* 积分构成：到期提醒整行置顶，下面两张表两列并排 */
+@media (min-width: 1240px) {
+  #view-packages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #view-packages > .box:first-child { grid-column: 1 / -1; }
+}
 </style>
 </head>
 <body>
@@ -1170,27 +1176,6 @@ input::placeholder { color: var(--ink-3); }
         <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
         <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分剩余（不含禁用）/ 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
-      </div>
-
-      <!-- 到期提醒：数据取 /overview 的 credits_expiry_buckets（签到与余额后台刷新
-           按自然日聚合后写入 state.json），打开页面零上游请求。同日多个包合并为一行，
-           后续批次在日期下方列出；完整逐包明细在「积分构成」页。 -->
-      <div class="box">
-        <header>
-          <h3>积分到期提醒 <span class="hint">按自然日聚合 · 日均需耗 = 该日到期积分 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</span></h3>
-          <span class="grow"></span>
-          <span class="note" id="expNote"></span>
-          <button class="xs" id="btnExp" title="逐账号向上游实时查询一次积分到期批次，结果与「积分构成」共用缓存">检查</button>
-        </header>
-        <div class="tbl-wrap">
-        <table class="acc">
-          <thead><tr>
-            <th>账号</th><th>最近到期</th><th class="num">距到期</th>
-            <th class="num">该日到期</th><th class="num">日均需耗</th>
-          </tr></thead>
-          <tbody id="expBody"></tbody>
-        </table>
-        </div>
       </div>
 
       <div class="box">
@@ -1430,6 +1415,27 @@ input::placeholder { color: var(--ink-3); }
 
     <!-- 积分构成 -->
     <section class="view" id="view-packages" hidden>
+      <!-- 到期提醒：数据取 /overview 的 credits_expiry_buckets（签到与余额后台刷新
+           按自然日聚合后写入 state.json），打开页面零上游请求。同日多个包合并为一行，
+           后续批次在日期下方列出；完整逐包明细见下方「积分到期分布」。 -->
+      <div class="box">
+        <header>
+          <h3>积分到期提醒 <span class="hint">按自然日聚合 · 日均需耗 = 该日到期积分 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="expNote"></span>
+          <button class="xs" id="btnExp" title="逐账号向上游实时查询一次积分到期批次，结果与「积分构成」共用缓存">检查</button>
+        </header>
+        <div class="tbl-wrap">
+        <table class="acc">
+          <thead><tr>
+            <th>账号</th><th>最近到期</th><th class="num">距到期</th>
+            <th class="num">该日到期</th><th class="num">日均需耗</th>
+          </tr></thead>
+          <tbody id="expBody"></tbody>
+        </table>
+        </div>
+      </div>
+
       <div class="box">
         <header>
           <h3>积分到期分布</h3>
