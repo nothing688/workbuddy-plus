@@ -745,7 +745,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* ── 请求记录表（运行日志）────────────────────────────────────────── */
   /* 定宽列 + 省略号：自动布局会把「Token」撑到 178px、「耗时」压到 43px，
      整表还比容器宽 80px 需要横向滚动。给每列定宽后，User-Agent 吃剩余空间。 */
-  .acc.req { table-layout: fixed; width: 100%; min-width: 900px; }
+  /* 列宽按比例固定，但整表有 1100px 下限：十列要放完整的时间/模型/请求 ID，
+     900px 装不下（时间、IP、请求 ID 都会被切）。窄窗口就横向滚动，不截断。 */
+  .acc.req { table-layout: fixed; width: 100%; min-width: 1100px; }
   .acc.req td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acc.req td .clip { display: inline-block; max-width: 100%; vertical-align: middle; }
   /* 徽标是 inline-flex，默认贴在文字基线上，会把行高从 39px 顶到 59px */
@@ -2171,8 +2173,8 @@ input::placeholder { color: var(--ink-3); }
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <colgroup>
-              <col style="width:8%"><col style="width:11%"><col style="width:17%"><col style="width:9%">
-              <col style="width:12%"><col style="width:9%">
+              <col style="width:8%"><col style="width:10%"><col style="width:16%"><col style="width:8%">
+              <col style="width:12%"><col style="width:12%">
               <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:17%">
             </colgroup>
             <thead><tr>
