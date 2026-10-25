@@ -492,7 +492,7 @@ setTimeout(() => {
 function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="big">' +
+    tb.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="big">' +
       (filtered ? '该分组下还没有账号' : '账号池是空的') + '</div>' +
       (filtered ? '换一个分组，或点账号行上的分组徽章调整归属' : '点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') +
       '</div></td></tr>';
@@ -597,7 +597,7 @@ function renderAccounts(list, filtered, probe) {
     let probeRow = '';
     if (pr) {
       const lat = formatLatency(pr.latency_ms);
-      probeRow = '<tr class="probe-row"><td colspan="11"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
+      probeRow = '<tr class="probe-row"><td colspan="10"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
         (pr.ok
           ? '<span class="tag ok">可用' + (lat === '—' ? '' : ' · ' + esc(lat)) + '</span>'
           : '<span class="tag bad">不可用</span><span>' + esc(pr.error || '测试失败（无错误信息）') + '</span>') +
@@ -612,8 +612,7 @@ function renderAccounts(list, filtered, probe) {
       '<td class="pick"><input type="checkbox" class="row-pick" data-u="' + esc(s.uid) + '"' +
         (picked ? ' checked' : '') + ' title="选择该账号（可批量移动分组）" aria-label="选择该账号"></td>' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + nameCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
-      '<td class="grp-cell">' + grpCell + '</td>' +
+      '<td class="who"><div class="nm">' + nameCell + ' ' + grpCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -3498,7 +3497,7 @@ async function loadUsage() {
     $('usCreditHead').innerHTML = '';
     $('usDimTabs').innerHTML = usTabsHtml(US_DIM_TABS, usDim, null);
     $('usCreditTabs').innerHTML = usTabsHtml([['account', '按账号'], ['model', '按模型']], usCreditDim, null);
-    $('usDimBody').innerHTML = '<tr><td colspan="11" class="empty">读取用量失败</td></tr>';
+    $('usDimBody').innerHTML = '<tr><td colspan="10" class="empty">读取用量失败</td></tr>';
     $('usCreditBody').innerHTML = '<tr><td colspan="7" class="empty">读取用量失败</td></tr>';
   }
 }
@@ -5112,7 +5111,7 @@ async function loadBalance() {
                fmtFlowCell(t, mo, 'gained', days);
       })() +
       '<td class="num">' + (s.points || []).length + '</td></tr>').join('')
-      : '<tr><td colspan="11"><div class="empty"><div class="big">该域暂无采样</div>' +
+      : '<tr><td colspan="10"><div class="empty"><div class="big">该域暂无采样</div>' +
         '切到其他域，或等待下一次余额刷新</div></td></tr>';
     renderBalanceFoot(rows, d.now, days);
     const note = $('bhNote');
@@ -5311,7 +5310,7 @@ async function loadKeys() {
     $('kUsed').textContent = list.reduce((s, x) => s + (x.used_credit || 0), 0).toFixed(2);
     $('kReq').textContent = list.reduce((s, x) => s + (x.req_count || 0), 0);
     if (!list.length) {
-      tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="big">暂无 API 密钥</div>点击右上角「新建密钥」创建，并将返回的明文妥善交付给使用方</div></td></tr>';
+      tb.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="big">暂无 API 密钥</div>点击右上角「新建密钥」创建，并将返回的明文妥善交付给使用方</div></td></tr>';
       return;
     }
     tb.innerHTML = list.map(x => {
@@ -5349,7 +5348,7 @@ async function loadKeys() {
     }).join('');
     tb.querySelectorAll('[data-kact]').forEach(b => b.onclick = () => keyAct(b.dataset.kact, b.dataset.id));
   } catch (e) {
-    tb.innerHTML = '<tr><td colspan="11"><div class="empty">密钥列表加载失败：' + esc(String(e.message || e)) + '</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="10"><div class="empty">密钥列表加载失败：' + esc(String(e.message || e)) + '</div></td></tr>';
   }
 }
 

@@ -1132,6 +1132,21 @@ input::placeholder { color: var(--ink-3); }
 
 /* 行内操作严格一排：沿用最初原版槽位（4×54 + 68 + 3×54），必要时表格横向滚动 */
 .acts-inner { grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); }
+
+/* 与原版一致：操作列不吸附，随表格一起横向滚动；取消强制最小宽度，让列自然分配 */
+.acc th.c-acts, .acc td.acts { position: static; box-shadow: none; background: inherit; }
+.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 0; }
+.usage-cell { min-width: 0; }
+.who { min-width: 0; max-width: 210px; }
+
+/* 对齐原版排版：单排操作、无分组列（分组改为名字后的徽章） */
+.acts-inner { grid-template-columns: repeat(7, 44px); gap: 4px; }
+.acts-inner button { font-size: 11.5px; }
+.who { min-width: 0; max-width: 210px; }
+.who .nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.who .nm .grp-badge { flex: none; padding: 0 6px; font-size: 10.5px; line-height: 16px; }
+.acc th:nth-child(4), .acc td:nth-child(4) { min-width: 150px; } /* 状态列 */
+.usage-cell { min-width: 200px; }
 </style>
 </head>
 <body>
@@ -1251,7 +1266,7 @@ input::placeholder { color: var(--ink-3); }
           <thead><tr>
             <th class="pick"><input type="checkbox" id="accSelAll" title="全选当前筛选范围内的账号" aria-label="全选当前筛选范围内的账号"></th>
             <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>分组</th><th>状态</th><th>积分</th>
+            <th>账号</th><th>状态</th><th>积分</th>
             <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
