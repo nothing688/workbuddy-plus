@@ -904,6 +904,11 @@ body {
   #view-accounts .stats > .stat:nth-child(-n+4) { flex: 1 1 calc(25% - 11px); }
   #view-accounts .stats > .stat:nth-child(n+5) { flex: 1 1 calc(33.333% - 10px); }
 }
+/* 窄屏：积分那张单独占满一行。它是唯一带「X / Y」两段数字的卡片，跟别人挤半行时
+   只放得下 6 位；单独一行能放到 13 位以上，也不会因为折行变高。 */
+@media (max-width: 900px) {
+  #view-accounts .stats > .stat:nth-child(5) { flex-basis: 100%; }
+}
 .stat:hover, .stats .st:hover { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); }
 /* 数值必须在卡片里：网格轨道允许收缩（min-width:0），长数字（剩下的 / 总额）按
    斜杠分两段、放不下时折行。Windows 的 Consolas 比容器里的字体宽，之前会顶出卡片。 */
