@@ -10,6 +10,16 @@
      「先闪一下夜间模式」。theme.js 把判定提到样式表解析之前，见文件头注释。 -->
 <script src="theme.js"></script>
 <style>
+@font-face {
+  font-family: 'WQY Sans';
+  src: url('/panel/fonts/wqy-sans.woff2') format('woff2');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'WQY Mono';
+  src: url('/panel/fonts/wqy-mono.woff2') format('woff2');
+  font-display: swap;
+}
 /* ── 设计令牌：明暗两套独立色板 ─────────────────────────────────────────
    冷石墨基调（仪表盘语言，非营销页）：底色分层 + 单一靛蓝强调（仅交互），
    语义色只给状态。等宽数字承载所有观测值，tabular-nums 对齐。 */
@@ -24,10 +34,12 @@
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
   --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.5);
-  --mono: "Cascadia Mono", ui-monospace, "SF Mono", Consolas, "Sarasa Mono SC", "WenQuanYi Zen Hei Mono", "DejaVu Sans Mono", monospace;
+  /* 内嵌字体（WOFF2 子集，随二进制分发，见 index.go）。放在栈首，
+     所有平台看到的字形一致；加载失败会自然回落到系统字体，不会白屏。 */
+  --mono: "WQY Mono", "Cascadia Mono", ui-monospace, "SF Mono", Consolas, "Sarasa Mono SC", "DejaVu Sans Mono", monospace;
   /* 中文显式点名「微软雅黑 UI」：它的小字号 hinting 比旧版 Microsoft YaHei 稳，
      12px 表格里笔画不会糊成一片；没装则依次回落苹方 / 雅黑 / 思源黑体。 */
-  --sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "WenQuanYi Zen Hei", sans-serif;
+  --sans: "WQY Sans", system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
 }
 [data-theme="light"] {
   --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;

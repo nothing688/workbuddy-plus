@@ -215,6 +215,11 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
 	// GitHub 热更新：check 只读（查 Release / 比版本），apply 下载并替换自身。
+	// 内嵌字体（CSP font-src 'self'）。不走鉴权：字体本身无秘密，且必须能被
+	// 无 key 的登录页加载。
+	p.mux.HandleFunc("GET /panel/fonts/wqy-sans.woff2", p.fontFile(fontSansWOFF2))
+	p.mux.HandleFunc("GET /panel/fonts/wqy-mono.woff2", p.fontFile(fontMonoWOFF2))
+
 	p.mux.HandleFunc("GET /panel/api/selfupdate/check", p.withAuth(p.selfUpdateCheck))
 	p.mux.HandleFunc("POST /panel/api/selfupdate/apply", p.withAuth(p.selfUpdateApply))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))

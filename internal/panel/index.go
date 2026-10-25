@@ -26,6 +26,20 @@ var themeJS []byte
 //go:embed app.js
 var appJS []byte
 
+// 内嵌字体：文泉驿正黑（GB2312 子集）与它的等宽变体（ASCII 子集）。
+//
+// 为什么要把字体打进二进制：面板的观感在每台机器上都不一样——Windows 落到雅黑 UI、
+// macOS 落到苹方、Linux 取决于装了哪套中文字体，同一个表格在你我屏幕上是三种字宽。
+// 内嵌一份后所有人看到同一套字形，也省掉「让用户自己装字体」这一步。
+// 两个子集合计约 1MB：正黑只保留 GB2312 的 7540 个常用字（覆盖绝大多数字符），
+// 等宽只保留 ASCII（时间/IP/请求 ID 这些）。生僻字仍回落到系统字体。
+//
+//go:embed assets/wqy-sans-subset.woff2
+var fontSansWOFF2 []byte
+
+//go:embed assets/wqy-mono-subset.woff2
+var fontMonoWOFF2 []byte
+
 // 内容指纹（issue #33）：把脚本 URL 绑到脚本内容上。
 //
 // 为什么需要：面板原先靠 `Cache-Control: no-store` 保证不拿到旧脚本，那是对
@@ -65,7 +79,7 @@ var indexHTML = func() []byte {
 //   - frame-ancestors 'none'    禁止被任何站点 iframe 嵌套（点击劫持）
 //   - base-uri 'none'          禁止注入 <base> 改写相对路径
 const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-	"connect-src 'self'; img-src 'self' data:; form-action 'none'; " +
+	"connect-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'none'; " +
 	"frame-ancestors 'none'; base-uri 'none'"
 
 // setSecurityHeaders 写入面板统一安全响应头（页面与 API 都要，API 也含 JSON 数据）。
@@ -97,6 +111,18 @@ func (p *Panel) themeScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(themeJS)
+}
+
+// fontFile 输出内嵌字体。字体内容随二进制固定（改字体必然换二进制），
+// 所以给一年 immutable 缓存：面板其它资源仍然 no-store，这里不会带来陈旧问题。
+func (p *Panel) fontFile(data []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
+		w.Header().Set("Content-Type", "font/woff2")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}
 }
 
 // appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。
