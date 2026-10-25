@@ -92,6 +92,22 @@ async function api(path, opts = {}) {
   if (!r.ok) { const e = new Error(d.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
   return d;
 }
+/* ── 侧栏收起（桌面图标模式）────────────────────────────────────────
+   状态存 localStorage：刷新后保持上次选择。窄屏不看这个开关（移动端用抽屉）。 */
+try {
+  if (localStorage.getItem('wb2api.navRail') === '1' && typeof document.querySelector === 'function') {
+    const shell = document.querySelector('.shell');
+    if (shell) shell.classList.add('rail');
+  }
+} catch (e) {}
+if ($('btnRail')) $('btnRail').onclick = () => {
+  if (typeof document.querySelector !== 'function') return;
+  const shell = document.querySelector('.shell');
+  if (!shell) return;
+  const railed = shell.classList.toggle('rail');
+  try { localStorage.setItem('wb2api.navRail', railed ? '1' : '0'); } catch (e) {}
+};
+
 function toast(msg, cls) {
   const el = document.createElement('div');
   el.className = 'tst ' + (cls || '');

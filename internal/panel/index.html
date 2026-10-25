@@ -968,6 +968,56 @@ input::placeholder { color: var(--ink-3); }
   .stat .v, .stats .st .v { font-size: 20px; }
   .box { border-radius: 12px; }
 }
+
+/* ═══ 布局 2.0：可收起侧栏 + 内容栅格 ═══════════════════════════════ */
+@media (min-width: 761px) {
+  .shell { transition: grid-template-columns .2s ease; }
+  .shell.rail { grid-template-columns: 64px minmax(0, 1fr); }
+  .shell.rail .brand { padding: 18px 0; justify-content: center; }
+  .shell.rail .brand::before { width: 24px; height: 24px; }
+  .shell.rail .brand .name, .shell.rail .brand .sub { display: none; }
+  .shell.rail .nav ul { padding: 12px 8px; }
+  .shell.rail .nav a { justify-content: center; padding: 0; font-size: 0; gap: 0; }
+  .shell.rail .nav a svg { width: 18px; height: 18px; }
+  .shell.rail .nav .sig { display: none; }
+  .shell.rail .nav a.on::before { left: -8px; }
+}
+@media (min-width: 761px) { #btnRail { display: inline-flex; } }
+@media (max-width: 760px) { #btnRail { display: none; } }
+
+/* 桌面宽屏：把「主表 + 次要卡片」排成栅格，减少纵向滚动 */
+@media (min-width: 1240px) {
+  #view-accounts {
+    display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 18px; align-items: start;
+  }
+  #view-accounts > * { margin-bottom: 0; grid-column: 1 / -1; }
+  /* 视觉顺序：账号池（主）→ 到期提醒 → 模型锁池 */
+  #view-accounts > .box:nth-child(3) { order: 1; }
+  #view-accounts > .box:nth-child(2) { order: 2; grid-column: span 7; }
+  #view-accounts > .box:nth-child(4) { order: 3; grid-column: span 5; }
+
+  #view-taskscenter {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+    gap: 18px; align-items: start;
+  }
+  #view-taskscenter > .box { margin-bottom: 0; }
+
+  #view-packages {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+    gap: 18px; align-items: start;
+  }
+  #view-packages > .box { margin-bottom: 0; }
+  #view-packages > #pkDetail { grid-column: 1 / -1; }
+
+  #view-balhist {
+    display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 18px; align-items: start;
+  }
+  #view-balhist > * { margin-bottom: 0; grid-column: 1 / -1; }
+  #view-balhist > .box:nth-child(2) { grid-column: span 6; }
+  #view-balhist > .box:nth-child(3) { grid-column: span 6; }
+}
 </style>
 </head>
 <body>
@@ -978,33 +1028,33 @@ input::placeholder { color: var(--ink-3); }
       <div class="sub" id="navSub">控制台</div>
     </div>
     <ul>
-      <li><a href="#accounts" data-view="accounts" class="on">
+      <li><a href="#accounts" data-view="accounts" title="账号池" class="on">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
         账号池</a></li>
-      <li><a href="#usage" data-view="usage">
+      <li><a href="#usage" data-view="usage" title="用量">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.5 13.5V8.2M8 13.5V3.5M11.5 13.5v-3"/></svg>
         用量</a></li>
-      <li><a href="#packages" data-view="packages">
+      <li><a href="#packages" data-view="packages" title="积分构成">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.2 5.4 8 2.5l5.8 2.9v5.2L8 13.5l-5.8-2.9z"/><path d="M2.2 5.4 8 8.3l5.8-2.9M8 8.3v5.2"/></svg>
         积分构成</a></li>
-      <li><a href="#balhist" data-view="balhist">
+      <li><a href="#balhist" data-view="balhist" title="余额趋势">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.2 5.4 8 2.5l5.8 2.9v5.2L8 13.5l-5.8-2.9z"/><path d="M2.2 5.4 8 8.3l5.8-2.9M8 8.3v5.2"/></svg>余额趋势</a></li>
-      <li><a href="#taskscenter" data-view="taskscenter">
+      <li><a href="#taskscenter" data-view="taskscenter" title="任务中心">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h10v9H8l-3 3v-3H3z"/><path d="M6 6.5h4M6 9h2.5"/></svg>
         任务中心</a></li>
-      <li><a href="#models" data-view="models">
+      <li><a href="#models" data-view="models" title="模型与档位">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
         模型与档位</a></li>
-      <li><a href="#config" data-view="config">
+      <li><a href="#config" data-view="config" title="配置">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
-      <li><a href="#maint" data-view="maint">
+      <li><a href="#maint" data-view="maint" title="维护">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3"/></svg>
         维护</a></li>
-      <li><a href="#keys" data-view="keys">
+      <li><a href="#keys" data-view="keys" title="API 密钥">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         API 密钥</a></li>
-      <li><a href="#logs" data-view="logs">
+      <li><a href="#logs" data-view="logs" title="运行日志">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>
         运行日志</a></li>
     </ul>
@@ -1017,6 +1067,9 @@ input::placeholder { color: var(--ink-3); }
 
   <div class="main">
     <div class="topbar">
+      <button class="icon ghost" id="btnRail" title="收起/展开导航" aria-label="收起或展开导航">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4.5h11M2.5 8h7M2.5 11.5h11"/></svg>
+      </button>
       <button class="icon ghost" id="btnNav" title="导航" aria-label="打开导航" aria-expanded="false">
         <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg>
       </button>
