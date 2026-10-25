@@ -1128,6 +1128,12 @@ input::placeholder { color: var(--ink-3); }
 /* 导航选中态：用内描边替代外挂色条，避免色条跑到侧栏外 */
 .nav a.on::before { display: none; }
 .nav a.on { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* 移动端：表格保持 table 布局（行宽=表宽），横向滚动交给 .tbl-wrap，
+   避免 display:block 时行只占内容宽度、右侧留出空白 */
+@media (max-width: 760px) {
+  table.acc { display: table; overflow: visible; white-space: nowrap; }
+}
 </style>
 </head>
 <body>
