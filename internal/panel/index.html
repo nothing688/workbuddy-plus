@@ -157,7 +157,6 @@ button {
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 550; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); }
 button.ghost { background: transparent; }
 button.danger { color: var(--bad); }
 button.danger:hover:not(:disabled) { border-color: var(--bad); }
@@ -964,11 +963,25 @@ button:hover:not(:disabled) {
 }
 button:active:not(:disabled) { transform: translateY(1px); }
 button.primary {
+  position: relative; overflow: hidden;
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, #fff 10%), var(--accent));
   border-color: transparent; color: var(--accent-ink);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 8px 18px -12px var(--accent);
 }
-button.primary:hover:not(:disabled) { filter: brightness(1.06); background: var(--accent); }
+/* 蓝色主按钮的悬停提亮走一层白色蒙版（opacity 过渡），不再用 filter / 换背景：
+   - 换 background：渐变→纯色不可插值，会硬切一下，看着像闪；
+   - filter: brightness：会新建合成层，Chrome 下鼠标掠过常出现一帧闪白。
+   蒙版是普通绘制，opacity 过渡连续，且文字在蒙版上层不受影响。 */
+button.primary::after {
+  content: ''; position: absolute; inset: 0; background: #fff; opacity: 0;
+  transition: opacity .12s ease; pointer-events: none;
+}
+button.primary:hover:not(:disabled)::after { opacity: .12; }
+/* 通用 button:hover 会把背景改成淡蓝（选择器比 .primary 更具体），这里显式钉住，
+   否则蓝键一悬停就掉成灰蓝——提亮只由上面的蒙版负责。 */
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, #fff 10%), var(--accent));
+}
 button.ghost { background: transparent; }
 button.ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 button.icon { border-radius: var(--radius-sm); }
@@ -1079,9 +1092,7 @@ input::placeholder { color: var(--ink-3); }
   background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
   box-shadow: 0 6px 16px -10px var(--accent);
 }
-.topbar .icon.primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, #fff); border-color: var(--accent);
-}
+.topbar .icon.primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
 
 /* 卡片头部允许换行，长说明不再把右侧 note 挤成竖排 */
 .box > header { flex-wrap: wrap; row-gap: 6px; }
