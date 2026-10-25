@@ -2382,7 +2382,13 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 					"channel verification blocked (11-128 request illegal)")
 				return
 			}
-			h.cfg.Pool.Disable(uid, "account restricted by upstream (11140 request illegal); appeal in WorkBuddy (submit feedback) to lift the restriction")
+			// 面板状态列直接显示这行文案：带上上游 zh 原文（如「账号存在异常行为，已暂停」），
+			// 运维不用翻日志猜 11140 是什么；末尾给出唯一解法（在 WorkBuddy 里申诉）。
+			reason := "11140 账号级风控（request illegal），需在 WorkBuddy 内提交反馈申诉解封"
+			if zh := upstreamBodyZh(body); zh != "" {
+				reason = "11140 " + zh + "（需在 WorkBuddy 内提交反馈申诉解封）"
+			}
+			h.cfg.Pool.Disable(uid, reason)
 			return
 		}
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, h.softCooldown(), "account fault (14017)")
@@ -2580,4 +2586,19 @@ func (h *Handler) hintOf(kind upstream.ErrKind, body, bareModel string, hasImage
 		msg = uerr.Msg
 	}
 	return upstream.GatewayHint(kind, msg, h.hintContext(bareModel, hasImage))
+}
+
+// upstreamBodyZh 取上游错误信封里的中文文案（"zh" 字段，如「账号存在异常行为，已暂停」）。
+// 只用于拼给运维看的禁用原因：解析失败/没有该字段时返回空串，不影响判定流程。
+func upstreamBodyZh(body string) string {
+	if body == "" {
+		return ""
+	}
+	var v struct {
+		Zh string `json:"zh"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v.Zh)
 }

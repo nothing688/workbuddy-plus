@@ -928,6 +928,31 @@ body {
 .acc .who .nm { font-weight: 600; }
 .acc .who .id { font-size: 11px; letter-spacing: .01em; }
 
+/* 状态列第二行：具体原因 + 状态码。只放 title 里的话，触屏和不悬停的人永远
+   看不到「为什么被打下去」，所以单独一行，过长省略、完整原文进 title。 */
+.st-why { display: flex; align-items: center; gap: 5px; margin-top: 5px; min-width: 0; font-size: 11px; color: var(--ink-3); }
+.st-why .codes { display: flex; gap: 4px; flex: none; }
+.st-why .code {
+  font: 10.5px/1.6 var(--mono); padding: 0 4px; border-radius: 4px;
+  border: 1px solid var(--line); color: var(--ink-2); background: var(--surface-2);
+}
+.st-why .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 状态列定宽：原因文案再长也只占这一列，靠省略号截断，不把整张表撑宽。 */
+#accTable th:nth-child(4), #accTable td:nth-child(4) { width: 208px; max-width: 208px; }
+/* 窄桌面放不下十列时，先收起两列次要信息（在途 / 最近成功），保证操作按钮不被
+   卡片边缘切掉；手机端是卡片布局，不受这条影响。 */
+@media (min-width: 761px) and (max-width: 1400px) {
+  #accTable th:nth-child(7), #accTable td:nth-child(7),
+  #accTable th:nth-child(9), #accTable td:nth-child(9) { display: none; }
+}
+/* 原因行占了一列宽，积分/用量两列相应收一档，1280 宽时整张表仍能塞进卡片。 */
+#accTable th:nth-child(5), #accTable td:nth-child(5) { min-width: 116px; }
+#accTable .usage-cell { min-width: 158px; }
+@media (max-width: 760px) {
+  .st-why { flex-wrap: wrap; }
+  .st-why .txt { white-space: normal; word-break: break-word; }
+}
+
 /* ── 控件：统一高度与手感 ───────────────────────────────────────── */
 button {
   border-radius: var(--radius-sm); font-weight: 500;
@@ -1379,7 +1404,7 @@ input::placeholder { color: var(--ink-3); }
           </span>
         </div>
         <div class="tbl-wrap">
-        <table class="acc">
+        <table class="acc" id="accTable">
           <thead><tr>
             <th class="pick"><input type="checkbox" id="accSelAll" title="全选当前筛选范围内的账号" aria-label="全选当前筛选范围内的账号"></th>
             <th class="mark" aria-hidden="true"></th>

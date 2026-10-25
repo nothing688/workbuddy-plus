@@ -495,6 +495,43 @@ setTimeout(() => {
 /* ── 账号池 ───────────────────────────────────────────────────────── */
 // renderAccounts 画账号行。probe 是可选的分组/测试状态快照 {busy, res}：
 // 由 paintAccounts 传入；不传时按「全部账号、无测试记录」渲染（顶层单测走这条路）。
+/* ── 状态列第二行「为什么」 ───────────────────────────────────────
+   把原因摊开写在状态标签下面：上游业务码（11140 / 12153 / 11-128 / 14017 / 6004）、
+   HTTP 状态码（http 403 / upstream 429 / 网关 401）各成一枚胶囊，后面跟一句人话。
+   上游信封里带 zh 原文时优先用它（「账号存在异常行为，已暂停」）。完整原文放 title，
+   行内超长省略，不把表格撑高。 */
+function statusWhyHtml(s, pr) {
+  let raw = '';
+  if (pr && pr.ok === false) raw = String(pr.error || '');
+  if (!raw) raw = String((s.disabled && s.disabled_reason) || s.reason || '');
+  raw = raw.trim();
+  if (!raw) return '';
+  const codes = [];
+  const addCode = c => { if (c && codes.indexOf(c) < 0) codes.push(c); };
+  let m = raw.match(/\bhttp\s*(\d{3})\b/i);
+  if (m) addCode('HTTP ' + m[1]);
+  m = raw.match(/(?:upstream|网关|gateway)\s*(\d{3})\b/i);
+  if (m) addCode(m[1]);
+  m = raw.match(/^(?:HTTP\s*)?([45]\d{2})\b/i);
+  if (m) addCode(m[1]);
+  (raw.match(/\b(?:11-128|14017|6004|1\d{4})\b/g) || []).forEach(addCode);
+  // 上游信封里的中文原文（probe_chat 的错误串就是一整段 JSON）
+  const zh = (raw.match(/"zh"\s*:\s*"([^"]+)"/) || [])[1] || '';
+  let text = zh || raw
+    .replace(/\{[\s\S]*$/, '')                        // 去掉信封 JSON 尾巴
+    .replace(/^upstream\s+\w+\s*\(http\s*\d+\)\s*:?\s*/i, '')
+    .trim();
+  // 开头的状态码已经进胶囊了，正文里不再重复
+  text = text.replace(/^(?:上游\s*)?(?:HTTP\s*)?(?:(?:11-128|[45]\d{2}|\d{4,5}))[\s：:]+/i, '').trim();
+  if (!codes.length && !text) return '';
+  return '<div class="st-why" title="' + esc(raw) + '">' +
+    (codes.length
+      ? '<span class="codes">' + codes.map(c => '<span class="code">' + esc(c) + '</span>').join('') + '</span>'
+      : '') +
+    (text ? '<span class="txt">' + esc(text) + '</span>' : '') +
+    '</div>';
+}
+
 function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
@@ -610,7 +647,7 @@ function renderAccounts(list, filtered, probe) {
       '<td class="who"><div class="nm">' + nameCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div>' +
         '<div class="id">' + esc(short) + '</div>' +
         (grpCell ? '<div class="grp-line">' + grpCell + '</div>' : '') + '</td>' +
-      '<td data-label="状态">' + tag + note + rateLimits + '</td>' +
+      '<td data-label="状态">' + tag + statusWhyHtml(s, pr) + note + rateLimits + '</td>' +
       '<td class="cred" data-label="积分" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num" data-label="成功 / 失败">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
       '<td class="num" data-label="在途">' + (s.in_flight || 0) + '</td>' +

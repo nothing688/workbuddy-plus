@@ -131,6 +131,9 @@ const ctx = {
     return { label: '已禁用', tone: 'warn', action: '' };
   },
   disabledAge: () => '3 天前',
+  // 状态列的原因行由 statusWhyHtml 生成（定义在抽取范围之外），本测试只关心
+  // 暂停徽标/按钮，用空串占位即可。
+  statusWhyHtml: () => '',
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.renderAccounts = renderAccounts;', ctx);
