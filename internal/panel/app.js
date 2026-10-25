@@ -632,19 +632,10 @@ function renderAccounts(list, filtered, probe) {
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts"><div class="acts-inner">' + [
-        // 无个人成长体系的账号（企业版 / 静态 API Key）不渲染「签到」「任务」：前者
-        // 上游 400「企业账号不支持该操作」，后者 403 growth-only；只留「额度」，点它走
-        // /balance，额度由 upstream 的企业口径端点（get-enterprise-user-usage）填充。
-        // 八个动作按固定槽位输出，缺位留空 span —— CSS 用 grid 固定列宽，逐行对齐。
-        // 「探活」单独占一槽（仅封禁态渲染）：它与「解冻」是两个独立动作，若挤在同一
-        // 槽里输出两个按钮，冻结行的列数就与其它行不同，整列又会错位。
+        // 主操作三个 + 「更多」菜单：7 个文字按钮并排会把表格撑到横向滚动。
         (personal ?
           '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' : ''),
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>',
-        (personal ?
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : ''),
-        // 统一的「测试」：正常号发一次极小对话（probe_chat），封禁/冷却号走只读解封探测
-        // （probe_ban）——两者都是「这号现在能不能用」，只保留一个入口，不再并排两个按钮。
         (pb[s.uid]
           ? '<button class="xs ghost" data-a="probe" data-u="' + esc(s.uid) + '" disabled>测试中</button>'
           : '<button class="xs ghost" data-a="probe" data-u="' + esc(s.uid) + '"' +
@@ -652,13 +643,18 @@ function renderAccounts(list, filtered, probe) {
               ? ' title="只读探测上游是否已解封：不 revive、不参与选号、不改任何状态"'
               : ' title="向上游发一次极小对话，确认该账号此刻真的可用"') +
             '>测试</button>'),
-        (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
-                : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
+        '<button class="xs ghost" data-a="more" data-u="' + esc(s.uid) + '" title="更多操作">更多</button>',
+      ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
+      '<div class="acts-menu" hidden>' + [
+        (personal ? '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : ''),
+        (frozen ? '<button class="xs ghost" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
+                : (s.paused ? '<button class="xs ghost" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')),
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
-      ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
-      '</div></td></tr>' + probeRow;
+      ].filter(Boolean).join('') +
+      '</div></div></td></tr>' + probeRow;
+
   }).join('');
   syncAccSelHead(list);
 }
@@ -1105,6 +1101,12 @@ async function loadOverview(quiet) {
   } catch (e) { if (!quiet) toast(e.message, 'err'); }
 }
 
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', ev => {
+    if (ev.target.closest && ev.target.closest('.acts')) return;
+    document.querySelectorAll('.acts-menu').forEach(m => m.setAttribute('hidden', ''));
+  });
+}
 $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
   if (!b) return;
@@ -1113,6 +1115,20 @@ $('accBody').addEventListener('click', async ev => {
   // 前者开弹框、后者只改行内结果（池状态没变，刷 overview 纯属浪费）。
   if (a === 'meta') { openMeta(u, b.dataset.f); return; }
   if (a === 'movegroup') { openGroupPicker(u); return; }
+  if (a === 'more') {
+    const menu = b.nextElementSibling;
+    const open = menu && menu.hasAttribute('hidden');
+    if (typeof document !== 'undefined' && document.querySelectorAll) {
+      document.querySelectorAll('.acts-menu').forEach(m => m.setAttribute('hidden', ''));
+    }
+    if (menu && open) {
+      const r = b.getBoundingClientRect();
+      menu.style.top = Math.min(r.bottom + 6, window.innerHeight - 190) + 'px';
+      menu.style.left = Math.max(8, r.right - 150) + 'px';
+      menu.removeAttribute('hidden');
+    }
+    return;
+  }
   if (a === 'probe_chat') { runProbeChat(u); return; }
   if (a === 'remove' && !confirm('移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;

@@ -1018,6 +1018,71 @@ input::placeholder { color: var(--ink-3); }
   #view-balhist > .box:nth-child(2) { grid-column: span 6; }
   #view-balhist > .box:nth-child(3) { grid-column: span 6; }
 }
+
+/* ═══ 保留的可用性修复（不涉及大区域结构）═══════════════════════════ */
+/* 顶栏主按钮必须是实心蓝：之前 .topbar .icon 的透明背景覆盖了 .primary */
+.topbar .icon.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+  box-shadow: 0 6px 16px -10px var(--accent);
+}
+.topbar .icon.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #fff); border-color: var(--accent);
+}
+
+/* 卡片头部允许换行，长说明不再把右侧 note 挤成竖排 */
+.box > header { flex-wrap: wrap; row-gap: 6px; }
+.box > header .note { white-space: nowrap; }
+
+/* 状态列给足宽度，reason 不再逐词竖排 */
+.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 156px; }
+.acc td { padding: 10px 11px; }
+
+/* 行内操作：3 个常用 + 更多菜单，表格不再被按钮撑爆 */
+.acc tbody tr { background: var(--surface); }
+.acc tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); }
+.acc tbody tr:hover { background: var(--surface-2); }
+.acc th.c-acts, .acc td.acts {
+  position: sticky; right: 0; z-index: 3; background: inherit;
+  box-shadow: -14px 0 18px -16px rgba(0, 0, 0, .85);
+}
+.acc thead th.c-acts { background: var(--surface); }
+.acts-inner { grid-template-columns: repeat(4, 52px); position: relative; }
+.acts-menu {
+  position: fixed; z-index: 80; min-width: 132px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-2);
+}
+.acts-menu[hidden] { display: none; }
+.acts-menu button { width: 100%; height: 28px; justify-content: flex-start; text-align: left; font-size: 12.5px; }
+
+/* 移动端标题换行 */
+@media (max-width: 760px) {
+  .box > header h3 { white-space: normal; }
+}
+
+/* 取消大区域拼块：账号页回到单列堆叠，模块各占整行 */
+@media (min-width: 1240px) {
+  #view-accounts {
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    gap: 18px; align-items: start;
+  }
+  #view-accounts > * { grid-column: 1 / -1; margin-bottom: 0; }
+  #view-accounts > .box { min-width: 0; }
+}
+/* 表格宽度微调：整行后仍留出操作列余量 */
+.usage-cell { min-width: 220px; }
+.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 150px; }
+
+/* 覆盖旧的分栏规则：所有模块统一整行（旧规则用 nth-child 指定了 span，需要同级覆盖） */
+@media (min-width: 1240px) {
+  #view-accounts > .stats,
+  #view-accounts > .box:nth-child(2),
+  #view-accounts > .box:nth-child(3),
+  #view-accounts > .box:nth-child(4) {
+    grid-column: 1 / -1; order: 0;
+  }
+}
 </style>
 </head>
 <body>
