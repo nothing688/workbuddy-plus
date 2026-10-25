@@ -40,12 +40,14 @@ type cockpitAccount struct {
 //	Content-Type: multipart/form-data
 //	Body: file=<json>
 //
-// 返回 {ok, total, imported, skipped, errors}。
+// 返回 {ok, total, imported, skipped, errors, group}。
 func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErr(w, http.StatusBadRequest, "parse form: "+err.Error())
 		return
 	}
+	// group 可选：本次导入成功的账号统一归到该组（空 = 不动已有分组）。
+	group := strings.TrimSpace(r.FormValue("group"))
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "missing file field: "+err.Error())
@@ -128,8 +130,16 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		isNewAccount := p.cfg.Pool.AuthByUID(uid) == nil
+		// 先取原备注：SetMeta 是整条覆盖，直接传空会把用户手写的备注清掉。
+		prevNote := ""
+		if st, ok := p.cfg.Pool.Status(uid); ok {
+			prevNote = st.Note
+		}
 		p.cfg.Pool.Add(a)
 		p.cfg.Pool.Revive(uid)
+		if group != "" {
+			p.cfg.Pool.SetMeta(uid, group, prevNote)
+		}
 
 		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
 		if realm == "global" {
@@ -166,6 +176,7 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		"imported": imported,
 		"skipped":  skipped,
 		"errors":   errs,
+		"group":    group,
 	})
 }
 

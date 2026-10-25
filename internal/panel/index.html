@@ -306,14 +306,48 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
    导致 vertical-align:middle 失效（按钮整体偏上、行线不齐）。这里强制恢复
    table-cell，让该列和其他列一样参与行高与垂直居中；按钮排列交给内层 .acts-inner。 */
 td.acts { display: table-cell; vertical-align: middle; text-align: right; }
-/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 选号 / 禁用 / 移除），
+/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 测试 / 探活 / 选号 / 禁用 / 移除），
    缺哪个留空槽。否则「解冻 / 暂停选号 / 恢复选号」互斥会改变按钮个数，整列左右错位。
    分列放在内层 div：td 保持 table-cell，vertical-align:middle 才继续生效
    （直接给 td 设 display:grid 会退出表格布局，按钮变顶对齐）。 */
-.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(2, 54px); gap: 5px; justify-content: end; align-items: center; }
+.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); gap: 5px; justify-content: end; align-items: center; }
 /* 统一盒模型：primary 与 ghost 的边框/行高不同会让「解冻」行比「暂停选号」行高 2~3px，
    行线因此参差。固定高度 + border-box 后每行等高、按钮底边对齐。 */
 .acts-inner button { width: 100%; height: 26px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+
+/* ── 分组 / 备注 / 可用性测试 ──────────────────────────────────────
+   分组用徽章（点击即开编辑弹框，和备注共用同一个 meta 弹框）；备注平时是一行可点
+   文本，空值用淡色占位。两者都不新建表格列之外的控件，避免行高参差。 */
+.grp-cell { min-width: 86px; }
+.grp-badge {
+  display: inline-block; max-width: 150px; padding: 1px 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 500; line-height: 18px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: 1px;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.grp-badge:hover:not(:disabled) { border-color: var(--accent); }
+.grp-badge.none { color: var(--ink-3); background: var(--surface-2); border-color: var(--line); }
+.note-cell { max-width: 190px; }
+.note-edit {
+  display: block; max-width: 100%; padding: 0; border: 0; background: none; text-align: left;
+  font-size: 12.5px; line-height: 1.4; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.note-edit.empty { color: var(--ink-3); }
+.note-edit:hover:not(:disabled) { color: var(--accent); text-decoration: underline; }
+/* 测试结果行：挂在账号行下方整行展开，reply 用 <details> 收着，不挤占表格列宽。 */
+.acc tr.probe-row td { padding: 0 11px 10px 15px; background: transparent; }
+.probe-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.probe-line.bad { color: var(--bad); }
+.probe-line .probe-model { color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; }
+.probe-reply { min-width: 0; max-width: 100%; color: var(--ink-2); }
+.probe-reply summary { cursor: pointer; color: var(--ink-3); font-size: 11.5px; }
+.probe-reply .body {
+  margin-top: 4px; padding: 6px 9px; border-radius: 6px; max-height: 160px; overflow: auto;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  font: 11.5px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word;
+}
 
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
 .empty .big { font-size: 14px; color: var(--ink-2); margin-bottom: 6px; }
@@ -799,6 +833,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>账号池</h3>
           <span class="grow"></span>
           <span class="note" id="accNote"></span>
+          <span class="note" id="accGroupCounts"></span>
+          <label class="sel-note" title="按分组筛选账号池；计数为该分组的账号数 / 可用数">分组
+            <select id="accGroupFilter"><option value="__all__">全部分组</option></select>
+          </label>
           <button class="xs" id="btnRemarks">备注</button>
           <button class="xs" id="btnCheckinAll">全部签到</button>
           <button class="xs" id="btnTravelAll">旅行巡检</button>
@@ -809,7 +847,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <table class="acc">
           <thead><tr>
             <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>状态</th><th>积分</th>
+            <th>账号</th><th>分组</th><th>备注</th><th>状态</th><th>积分</th>
             <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
@@ -1693,6 +1731,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <!-- 导入 JSON -->
       <div id="addTabImport" class="tab-panel" hidden>
         <div class="hint" style="margin-bottom:8px">选择 cockpit tools 导出的 JSON 文件，批量导入账号。文件需为账号数组格式。</div>
+        <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
         <input type="file" id="importFile" accept=".json" style="margin-bottom:8px">
         <div id="importDone" class="state ok" hidden></div>
         <div id="importErr" class="state err" hidden></div>
@@ -1744,6 +1783,34 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <span class="grow"></span>
       <button id="btnRemarkClose">关闭</button>
       <button class="primary" id="btnRemarkSave">保存</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 分组与备注：写回后端（POST /accounts/{uid}/meta），与上面「备注」按钮的本机备注
+     是两套——本机备注只改展示名，这里的分组/备注是账号池的共享元数据。 -->
+<div class="veil" id="metaVeil">
+  <div class="dlg" style="width:460px">
+    <header>
+      <h3>分组与备注</h3>
+      <div class="hint" id="metaWho"></div>
+    </header>
+    <div class="body">
+      <label class="fld"><span class="lb">分组</span>
+        <input id="metaGroup" list="metaGroupList" placeholder="留空 = 未分组" autocomplete="off">
+        <datalist id="metaGroupList"></datalist>
+        <span class="hint">同组账号可在账号池顶部按分组筛选；名字相同的账号自动归为一组。</span>
+      </label>
+      <label class="fld"><span class="lb">备注</span>
+        <input id="metaNote" placeholder="留空 = 清除备注" autocomplete="off">
+        <span class="hint">给运营看的说明（用途、归属人、采购批次等），保存后所有打开面板的人都能看到。</span>
+      </label>
+      <div class="state err" id="metaErr" hidden></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnMetaCancel">取消</button>
+      <button class="primary" id="btnMetaSave">保存</button>
     </footer>
   </div>
 </div>

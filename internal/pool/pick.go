@@ -16,41 +16,56 @@ import (
 // Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
 // 需要请求级轮换（tried）或分池（realm）时用 PickExcludingForRealm。
 func (p *Pool) Pick() *auth.Auth {
-	return p.pick(nil, "", "")
+	return p.pick(nil, "", "", nil)
 }
 
 // PickExcluding 同上，但跳过 tried 中的 uid（请求级轮换）。
 // 挑选策略：healthy 账号中按权重取前 5 名，再在 Top5 内按同一权重加权随机抽签，
 // 意图是打散热点，避免永远打同一个账号。
 func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
-	return p.pick(tried, "", "")
+	return p.pick(tried, "", "", nil)
 }
 
 // PickExcludingForModel 模型感知选号：等同 PickExcluding，但对「6004 模型级冷却中的
 // 账号」进行模型豁免——请求模型与其 trigger 模型不同时视为可用（issue #31）。
 // reqModel 为空时即普通 PickExcluding（不影响既有调用语义）。
 func (p *Pool) PickExcludingForModel(tried map[string]bool, reqModel string) *auth.Auth {
-	return p.pick(tried, reqModel, "")
+	return p.pick(tried, reqModel, "", nil)
 }
 
 // PickExcludingForRealm 模型感知 + 分池选号：候选集先按 Realm()==realm 过滤
 // （realm 空 = 不过滤，退化为 PickExcludingForModel），再按模型健康口径判定。
 // 供 handler 在 global/cn 双域下分流（global 模型请求只路由 global 账号）。
 func (p *Pool) PickExcludingForRealm(tried map[string]bool, reqModel, realm string) *auth.Auth {
-	return p.pick(tried, reqModel, realm)
+	return p.pick(tried, reqModel, realm, nil)
+}
+
+// PickExcludingForRealmGroup 在 PickExcludingForRealm 之上再按运维分组收窄候选。
+// group=="" 时与 PickExcludingForRealm **完全等价**（直接委托，零回归）；group 非空时
+// 只在该组账号里选，realm / 模型健康豁免 / 在途 / 保留积分 / already-tried 判据与
+// 原函数同一套（组过滤只是候选集上的额外与门，见 pick 的 filter 参数）。
+// 组过滤同样作用于全冷却兜底：本组无可用号即返回 nil，不会捞到其他组的冷却号。
+func (p *Pool) PickExcludingForRealmGroup(tried map[string]bool, reqModel, realm, group string) *auth.Auth {
+	if group == "" {
+		return p.pick(tried, reqModel, realm, nil)
+	}
+	return p.pick(tried, reqModel, realm, func(e *entry) bool { return e.group == group })
 }
 
 // pick 在 healthy 候选集中按权重加权随机选出账号，并记录 lastUsed（防并发撞号）。
 // reqModel 非空时把健康口径换成 healthyForModel（6004 模型豁免生效）。
 // realm 非空时候选过滤叠加 Realm()==realm 谓词（分池选号域）。
-func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
+// filter 非 nil 时叠加为额外的候选与门（目前仅供按分组选号使用）；nil = 不过滤。
+func (p *Pool) pick(tried map[string]bool, reqModel, realm string, filter func(*entry) bool) *auth.Auth {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
 	realmOK := func(e *entry) bool { return realm == "" || e.a.Realm() == realm }
 	// 不健康 / 在途占满 / 保留积分停牌：都不接单（判据统一在 Pool.selectable；
 	// reqModel 非空时用 healthyForModel 口径）。
-	selectableOf := func(e *entry) bool { return realmOK(e) && p.selectable(e, now, reqModel) }
+	selectableOf := func(e *entry) bool {
+		return realmOK(e) && (filter == nil || filter(e)) && p.selectable(e, now, reqModel)
+	}
 	// floorBlocked 积分保底拦截判定（实现在 floorBlockedForRealmModel，与粘性路径共用）：
 	// 触底 + 收费（本地实测台账 或 上游目录倍率）即拦；免费/未知倍率不受限。
 	floorBlocked := func(e *entry) bool { return p.floorBlockedForRealmModel(e, reqModel, realm, now) }
@@ -74,7 +89,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	if len(cands) == 0 {
 		// 全冷却兜底：无 healthy 候选时，从冷却账号里选 until 最早到期的一个
 		// （熔断/冷却共用 expiry 口径，取较早截止者）。禁用的账号永不参与兜底。
-		return p.pickEarliestExpiryLocked(tried, now, realm, reqModel)
+		return p.pickEarliestExpiryLocked(tried, now, realm, reqModel, filter)
 	}
 	// 账号优先级（issue #62）：配了优先级的号构成「先烧层」，层内有号可用时其余号一律
 	// 不接单——「优先消耗某个账号的余额」是一条硬语义，加权排序做不到（排序只改抽签
@@ -308,11 +323,17 @@ func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time
 // 这里，若兜底不看保底，触底号会被「捞回来」继续接收费模型——表现为同一条
 // floor WARN 反复刷同一个号（实测：credits=1 < floor=150 仍持续中选）。
 // 兜底是**最后一道**选号路径，保底在它之前挡不住就等于没挡。
-func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, realm, model string) *auth.Auth {
+//
+// filter 与 pick 的候选谓词同源（按分组选号时不能让兜底捞到组外的冷却号）：
+// nil = 不过滤。
+func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, realm, model string, filter func(*entry) bool) *auth.Auth {
 	var best *entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
+		}
+		if filter != nil && !filter(e) {
+			continue // 分组过滤：组外账号不参与本组兜底
 		}
 		if realm != "" && e.a.Realm() != realm {
 			continue // 域过滤：池内跨 realm 的冷却账号不参与本 realm 兜底

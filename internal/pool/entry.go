@@ -115,6 +115,11 @@ type Status struct {
 	// Realm 账号域（cn/global，auth.Realm() 计算值；含 global.enabled 开关闸）。
 	// 供面板/状态接口按域分组展示。
 	Realm string `json:"realm,omitempty"`
+	// Group / Note 运维自定义的分组名与备注（SetMeta 写入，随 state.json 持久化）。
+	// 空串 = 未分组 / 无备注。分组只影响按组选号（PickExcludingForRealmGroup），
+	// 不参与健康判定。
+	Group string `json:"group"`
+	Note  string `json:"note"`
 	// Enterprise 企业版账号（auth.EnterpriseID 非空，计算值不落盘）。
 	// 企业版无个人成长体系（签到/成长任务/连登/旅行/夜猫子 上游均拒），
 	// 面板据此隐藏对应按钮；选号、保活、额度展示不受影响。
@@ -248,6 +253,11 @@ type entry struct {
 	// 幂等拒绝（"今天已签到"）都算；statusOf 据此输出 CheckinDone 供面板按钮显示
 	// 签到/已签。持久化：跨重启不丢当日状态。
 	lastCheckinDay string
+	// group / note 运维自定义的分组名与备注（空串 = 未分组 / 无备注）。
+	// 持久化（stateAccount.Group/Note）：分组是运维意图，重启不该失忆；
+	// 只影响按组选号（PickExcludingForRealmGroup）与面板展示，不参与健康判定。
+	group string
+	note  string
 	coolKind       CoolKind
 	until          time.Time // 冷却截止（即时冷却：CoolSoft 429 / CoolHard 余额耗尽）
 	disabled       bool
@@ -586,6 +596,11 @@ type stateAccount struct {
 	// 重新付学费探测。落盘/恢复均按 modelCostTTL 惰性过滤（6h 外不写不恢复——
 	// 陈旧价格不复活）；恢复侧剔除非法值（负 per1k/零 LastSeen 的结构破损条目）。
 	ModelCosts map[string]stateModelCost `json:"model_costs,omitempty"`
+
+	// Group 运维自定义分组名（空 = 未分组），Note 该账号的备注。与 entry.group/note
+	// 同源，随 state.json / Redis 快照一起往返（快照复用本结构，无需另加字段）。
+	Group string `json:"group,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
 
 // stateModelCooldown 单个 (账号, 模型) 的模型级独立冷却持久化记录，与运行态

@@ -220,6 +220,11 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/model_toggle", p.withAuth(p.modelToggle))
 	// 封禁账号探活：只读探测上游是否已解封，不 revive、不参与选号。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/probe_ban", p.withAuth(p.accountProbeBan))
+	// 分组 / 备注（运维自定义元数据）与分组聚合列表。
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/meta", p.withAuth(p.accountSetMeta))
+	p.mux.HandleFunc("GET /panel/api/groups", p.withAuth(p.groupsList))
+	// 可用性测试：真发一条最小对话（只读探测，不记失败/不冷却/不占在途）。
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/probe_chat", p.withAuth(p.accountProbeChat))
 	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))
 	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuth(p.loginPoll))
 	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))

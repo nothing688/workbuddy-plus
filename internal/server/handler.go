@@ -243,6 +243,20 @@ func isChatEntry(path string) bool {
 	return false
 }
 
+// requestGroup 解析「按分组选号」的目标分组：请求头 X-WB2A-Group 优先，其次
+// query ?group=。两端空白裁掉，空串 = 未指定（全池选号，行为与引入分组前一致）。
+// 头优先是给网关头统一注入用的（一个头覆盖所有代理链路），query 留作临时/调试入口；
+// 两者同时给出时以头为准。
+func requestGroup(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-WB2A-Group")); v != "" {
+		return v
+	}
+	if r.URL == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.URL.Query().Get("group"))
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.RequestLog != nil && r.Method == http.MethodPost && isChatEntry(r.URL.Path) {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now(), path: r.URL.Path}
@@ -811,7 +825,23 @@ func cachedModelsSnapshot() []upstream.ModelInfo {
 	return dynamicModelsCache.ids
 }
 
+// accountInGroup 报告 uid 的运维分组是否与请求分组一致。group 为空（未指定）恒
+// 为 true：不分组时粘性/选号判据逐字不变。分组信息只存在 pool 台账（SetMeta），
+// auth.Auth 上没有，故经 Status 查一次（持读锁，开销与既有 Status 调用同级）。
+func (h *Handler) accountInGroup(uid, group string) bool {
+	if group == "" || h.cfg.Pool == nil {
+		return true
+	}
+	st, ok := h.cfg.Pool.Status(uid)
+	return ok && st.Group == group
+}
+
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	// 按分组选号的目标组（头优先，其次 query；空 = 未指定）。在 chat 内核入口解析
+	// 一次即可覆盖三种入站协议：/v1/responses 与 /v1/messages 都是 r.Clone 后转进
+	// 本函数，请求头与 query 原样保留（见 responses.go / messages.go）。
+	// 仅在选号/粘性/末端错误三处消费，/v1/models、/healthz、面板接口不经过这里。
+	group := requestGroup(r)
 	if ok, why := h.budget.admit(); !ok {
 		used, limit, _, _ := h.budget.snapshot()
 		code, msg := "daily_budget_exceeded", fmt.Sprintf(
@@ -1028,6 +1058,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var modelBlock pool.ModelBlockStatus
 	// busyWaited 本次请求是否已经为「模型繁忙」等过一轮（issue #46，见 acct==nil 分支）。
 	busyWaited := false
+	// groupMiss 指定了分组、但在该组内选不到号（末端据此改报 no_account_in_group，
+	// 与全池 no_healthy_account 区分）。只在 group 非空时置位。
+	groupMiss := false
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
@@ -1259,17 +1292,18 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		var acct *auth.Auth
 		if stickyUID != "" {
 			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, curModel)
-			if acct == nil || (realm != "" && acct.Realm() != realm) {
-				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
-				// 本次回落普通轮换。
+			if acct == nil || (realm != "" && acct.Realm() != realm) || !h.accountInGroup(stickyUID, group) {
+				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）、realm 不符，
+				// 或不在本次请求指定的分组里 → 解绑，本次回落普通轮换（组内重选）。
 				unbindSticky()
 				acct = nil
 			}
 		}
 		if acct == nil {
-			// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
-			// （healthyForModel），realm 谓词过滤跨域账号。
-			acct = h.cfg.Pool.PickExcludingForRealm(tried, curModel, realm)
+			// 模型感知 + realm 感知 + 分组感知选号：模型非空时启用 6004 模型级冷却豁免
+			// （healthyForModel），realm 谓词过滤跨域账号，group 谓词只在该运维分组里选。
+			// group 为空时 Pool 侧直接委托旧实现（与 PickExcludingForRealm 逐字等价）。
+			acct = h.cfg.Pool.PickExcludingForRealmGroup(tried, curModel, realm, group)
 		}
 		if acct == nil {
 			// ⭐ 模型降级兜底（20261021 补的真实缺口）：全池该模型都处于 6004 冷却时，
@@ -1307,6 +1341,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			// 指定了分组并且走到了「本组选不到号」的末端：只有 group 非空才置位，
+			// 未指定分组时末端错误口径保持原样（no_healthy_account / model_busy）。
+			groupMiss = group != ""
 			st.status = http.StatusServiceUnavailable
 			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
 			//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
@@ -1988,6 +2025,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			hint += "; upstream: " + s
 		}
 		status = http.StatusBadRequest
+	}
+	// 按分组路由的末端语义（本地调度类错误，无上游原文）：指定了分组却在该组内选
+	// 不到号（组不存在 / 组内全禁用冷却 / 组内名额已试完）→ 503 + no_account_in_group，
+	// 文案点名分组。与全池 no_healthy_account（"服务端稍后重试"）和模型级 model_busy
+	// 分开，运维看错误码就知道该查分组配置，而不是去查账号健康或等冷却。
+	// 上游原文优先：lastErr 是真实上游错误时不改写（那不是"组里没号"）。
+	if groupMiss && !upstreamMsgPassed {
+		status = http.StatusServiceUnavailable
+		code = "no_account_in_group"
+		msg = fmt.Sprintf("分组 %s 无可用账号 (no account available in group %q)", group, group)
+		hint = fmt.Sprintf("no_account_in_group: group %q has no available account; check the group name or move accounts into it", group)
+		quota = false
+		retryAfterSec = 0
 	}
 	if retryAfterSec > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSec))

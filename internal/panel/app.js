@@ -7,6 +7,11 @@ let remarksCache = null;
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
+/* 分组筛选 / 分组计数 / 可用性测试结果：都是界面侧状态。账号池每 5s 轮询重建
+   tbody，这些必须存在 DOM 之外，否则刚测出来的结果、刚选的分组会被下一轮刷新抹掉。
+   accGroupFilter：null = 全部；'' = 未分组；其它 = 分组名。 */
+let groupsData = [], accGroupFilter = null, metaUID = null;
+const probeBusy = Object.create(null), probeResult = Object.create(null);
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 上游同步：轮询定时器（只用 setTimeout 递归，避免 setInterval 泄漏）。 */
@@ -462,12 +467,19 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
-function renderAccounts(list) {
+// renderAccounts 画账号行。probe 是可选的分组/测试状态快照 {busy, res}：
+// 由 paintAccounts 传入；不传时按「全部账号、无测试记录」渲染（顶层单测走这条路）。
+function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="big">' +
+      (filtered ? '该分组下还没有账号' : '账号池是空的') + '</div>' +
+      (filtered ? '换一个分组，或点账号行上的分组徽章调整归属' : '点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') +
+      '</div></td></tr>';
     return;
   }
+  const pb = (probe && probe.busy) || {};
+  const prs = (probe && probe.res) || {};
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
   tb.innerHTML = list.map(s => {
@@ -535,9 +547,32 @@ function renderAccounts(list) {
     const latency = formatLatency(tu.last_latency_ms);
     const rate = formatRate(tu.last_tokens_per_second);
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
+    // 分组 / 备注（后端 meta，全端共享）。两个单元格都只是按钮：点一下开编辑弹框，
+    // 省掉再找入口的成本；未分组与空备注用淡色占位，扫视时一眼能看出「没填」。
+    const grp = String(s.group == null ? '' : s.group);
+    const noteText = String(s.note == null ? '' : s.note);
+    const grpCell = '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="meta" data-f="group" data-u="' + esc(s.uid) +
+      '" title="' + esc(grp ? '分组：' + grp + '（点击修改）' : '未分组（点击设置）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
+    const noteCell = '<button class="note-edit' + (noteText ? '' : ' empty') + '" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
+      '" title="' + esc(noteText ? noteText : '点击添加备注') + '">' + (noteText ? esc(noteText) : '添加备注') + '</button>';
+    // 可用性测试的结果挂在账号行下方整行：reply 常是多行，塞进列里会把行撑变形。
+    const pr = prs[s.uid] || null;
+    let probeRow = '';
+    if (pr) {
+      const lat = formatLatency(pr.latency_ms);
+      probeRow = '<tr class="probe-row"><td colspan="11"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
+        (pr.ok
+          ? '<span class="tag ok">可用' + (lat === '—' ? '' : ' · ' + esc(lat)) + '</span>'
+          : '<span class="tag bad">不可用</span><span>' + esc(pr.error || '测试失败（无错误信息）') + '</span>') +
+        (pr.model ? '<span class="probe-model">' + esc(pr.model) + '</span>' : '') +
+        (pr.ok && pr.reply ? '<details class="probe-reply"><summary>查看回复</summary><div class="body">' + esc(pr.reply) + '</div></details>' : '') +
+        '</div></td></tr>';
+    }
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
       '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="grp-cell">' + grpCell + '</td>' +
+      '<td class="note-cell">' + noteCell + '</td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -553,7 +588,7 @@ function renderAccounts(list) {
         // 无个人成长体系的账号（企业版 / 静态 API Key）不渲染「签到」「任务」：前者
         // 上游 400「企业账号不支持该操作」，后者 403 growth-only；只留「额度」，点它走
         // /balance，额度由 upstream 的企业口径端点（get-enterprise-user-usage）填充。
-        // 七个动作按固定槽位输出，缺位留空 span —— CSS 用 grid 固定列宽，逐行对齐。
+        // 八个动作按固定槽位输出，缺位留空 span —— CSS 用 grid 固定列宽，逐行对齐。
         // 「探活」单独占一槽（仅封禁态渲染）：它与「解冻」是两个独立动作，若挤在同一
         // 槽里输出两个按钮，冻结行的列数就与其它行不同，整列又会错位。
         (personal ?
@@ -561,6 +596,11 @@ function renderAccounts(list) {
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>',
         (personal ?
           '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : ''),
+        // 「测试」向上游发一次极小对话（probe_chat），只读、不改池状态；测试中禁用按钮
+        // 防重复点击（状态在 probeBusy 里，5s 重渲染也不会把「测试中」冲掉）。
+        (pb[s.uid]
+          ? '<button class="xs ghost" data-a="probe_chat" data-u="' + esc(s.uid) + '" disabled>测试中</button>'
+          : '<button class="xs ghost" data-a="probe_chat" data-u="' + esc(s.uid) + '" title="向上游发一次极小对话，确认该账号此刻真的可用">测试</button>'),
         (frozen ? '<button class="xs ghost" data-a="probe_ban" data-u="' + esc(s.uid) + '" title="只读探测上游是否已解封：不 revive、不参与选号、不改任何状态">探活</button>' : ''),
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
@@ -568,8 +608,102 @@ function renderAccounts(list) {
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
       ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
-      '</div></td></tr>';
+      '</div></td></tr>' + probeRow;
   }).join('');
+}
+
+// paintAccounts 统一出口：先按 accGroupFilter 过滤，再把测试状态一起交给 renderAccounts。
+// 所有重渲染（5s 轮询 / 切分组 / 测试结束）都走这里，避免某条路径漏传状态导致结果闪回。
+function paintAccounts() {
+  const all = (overviewData && overviewData.accounts) || [];
+  const list = accGroupFilter == null ? all
+    : all.filter(a => a && String(a.group == null ? '' : a.group) === accGroupFilter);
+  renderAccounts(list, accGroupFilter != null, { busy: probeBusy, res: probeResult });
+}
+
+// loadGroups 取分组计数（GET /groups）。失败保留旧列表：后端未就绪时筛选停在「全部」，
+// 比每次都把已选分组清空要好。计数没变就不重建 <select>——否则每 5s 一次的重建会把
+// 用户正展开的下拉收起来。
+async function loadGroups() {
+  try {
+    const d = await api('groups');
+    const next = Array.isArray(d && d.groups) ? d.groups.filter(g => g && typeof g === 'object') : [];
+    if (JSON.stringify(next) === JSON.stringify(groupsData)) {
+      if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
+      return;
+    }
+    groupsData = next;
+  } catch (e) { return; }
+  renderGroupFilter();
+}
+
+// groupCountText 当前选中分组的 total/healthy；下拉收起后这行仍在，不用展开才知道人数。
+function groupCountText() {
+  if (accGroupFilter == null) return '';
+  const g = groupsData.find(x => x && String(x.name == null ? '' : x.name) === accGroupFilter);
+  if (!g) return '';
+  return (accGroupFilter || '未分组') + '：' + (g.total || 0) + ' 个 / ' + (g.healthy || 0) + ' 可用';
+}
+
+// renderGroupFilter 用 /groups 的计数重建下拉。空名 = 未分组，但它的 value 不能也是空串
+// （会和「全部」撞车），故用 __all__ / __none__ 两个哨兵，切换时再翻译回 null / ''。
+function renderGroupFilter() {
+  const sel = $('accGroupFilter');
+  if (!sel) return;
+  const has = accGroupFilter == null || groupsData.some(g => String(g.name == null ? '' : g.name) === accGroupFilter);
+  if (!has) accGroupFilter = null; // 分组被改名/清空 → 回落到全部
+  const total = groupsData.reduce((a, g) => a + (g.total || 0), 0);
+  const healthy = groupsData.reduce((a, g) => a + (g.healthy || 0), 0);
+  const opt = (v, label) => '<option value="' + esc(v) + '">' + esc(label) + '</option>';
+  sel.innerHTML =
+    opt('__all__', '全部分组（' + total + ' 个 · ' + healthy + ' 可用）') +
+    groupsData.map(g => {
+      const name = String(g.name == null ? '' : g.name);
+      return opt(name === '' ? '__none__' : name,
+        (name || '未分组') + '（' + (g.total || 0) + ' 个 · ' + (g.healthy || 0) + ' 可用）');
+    }).join('');
+  sel.value = accGroupFilter == null ? '__all__' : (accGroupFilter === '' ? '__none__' : accGroupFilter);
+  if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
+  // 下拉与导入页共用同一份分组名候选（datalist 只在输入时弹提示，不限制自由填写）。
+  if ($('metaGroupList')) {
+    $('metaGroupList').innerHTML = groupsData
+      .filter(g => g.name)
+      .map(g => '<option value="' + esc(g.name) + '"></option>').join('');
+  }
+}
+
+// runProbeChat 可用性测试：向上游发一次极小对话。结果存 probeResult（按 uid），
+// 行内展示；测试只读，不刷新 overview（池状态没有任何变化）。
+async function runProbeChat(uid) {
+  if (probeBusy[uid]) return; // 进行中：按钮已禁用，这里再兜一层防重复提交
+  probeBusy[uid] = true;
+  delete probeResult[uid];
+  paintAccounts();
+  try {
+    const r = await api('accounts/' + encodeURIComponent(uid) + '/probe_chat', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    probeResult[uid] = Object.assign({ ok: false }, r || {});
+  } catch (e) {
+    // 网络/404 也要给结论，否则行内一直空白，用户不知道是没测还是测失败。
+    probeResult[uid] = { ok: false, error: e.message };
+  } finally {
+    delete probeBusy[uid];
+    paintAccounts();
+  }
+}
+
+// openMeta 分组/备注小弹框。field 决定聚焦哪个输入（点分组徽章就落在分组上）。
+function openMeta(uid, field) {
+  metaUID = uid;
+  const acc = acctStateOf(uid) || {};
+  $('metaWho').textContent = (acc.nickname || '未命名') + ' · ' + String(uid);
+  $('metaGroup').value = String(acc.group == null ? '' : acc.group);
+  $('metaNote').value = String(acc.note == null ? '' : acc.note);
+  $('metaErr').hidden = true;
+  $('metaVeil').classList.add('on');
+  setTimeout(() => (field === 'note' ? $('metaNote') : $('metaGroup')).focus(), 60);
 }
 
 // renderModelLocks 模型锁池：哪些模型不能用、锁了几个号、还要锁多久。后端已按
@@ -623,7 +757,15 @@ async function loadOverview(quiet) {
     $('accNote').textContent = d.in_flight_full ? d.in_flight_full + ' 个账号在途占满' : '';
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
-    renderAccounts(d.accounts || []);
+    // 分组筛选 + 可用性测试状态在这里落地。用 typeof 兜底：顶层单测只切这一段 JS
+    // 求值（沙箱里没有这些模块级变量），少了兜底整段渲染会被 try/catch 吞掉。
+    const filter = typeof accGroupFilter === 'undefined' ? null : accGroupFilter;
+    const all = d.accounts || [];
+    renderAccounts(
+      filter == null ? all : all.filter(a => a && String(a.group == null ? '' : a.group) === filter),
+      filter != null,
+      typeof probeBusy === 'undefined' ? undefined : { busy: probeBusy, res: probeResult },
+    );
     renderModelLocks(d.model_locks);
     // 到期提醒随首页统计一起刷新：只用响应里已有的最早到期快照，零上游请求。
     renderExpirySnapshot(d);
@@ -634,6 +776,10 @@ $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
   if (!b) return;
   const u = b.dataset.u, a = b.dataset.a;
+  // 分组/备注编辑与可用性测试都不走下面的「操作 → 刷新 overview」流程：
+  // 前者开弹框、后者只改行内结果（池状态没变，刷 overview 纯属浪费）。
+  if (a === 'meta') { openMeta(u, b.dataset.f); return; }
+  if (a === 'probe_chat') { runProbeChat(u); return; }
   if (a === 'remove' && !confirm('移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
   b.disabled = true;
@@ -685,6 +831,45 @@ $('accBody').addEventListener('click', async ev => {
     loadOverview(true);
   }
 });
+
+/* ── 分组筛选 / 分组备注 ──────────────────────────────────────────── */
+$('accGroupFilter').onchange = () => {
+  const v = $('accGroupFilter').value;
+  // 哨兵翻回内部表示：'__all__' = 不筛，'__none__' = 空分组名（未分组）。
+  accGroupFilter = v === '__all__' ? null : (v === '__none__' ? '' : v);
+  paintAccounts();
+  if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
+};
+
+function closeMeta() { $('metaVeil').classList.remove('on'); metaUID = null; }
+$('btnMetaCancel').onclick = closeMeta;
+
+$('btnMetaSave').onclick = async () => {
+  if (!metaUID) return;
+  const b = $('btnMetaSave');
+  b.disabled = true;
+  $('metaErr').hidden = true;
+  try {
+    await api('accounts/' + encodeURIComponent(metaUID) + '/meta', {
+      method: 'POST',
+      body: JSON.stringify({
+        group: ($('metaGroup').value || '').trim(),
+        note: ($('metaNote').value || '').trim(),
+      }),
+    });
+    closeMeta();
+    toast('分组与备注已保存', 'ok');
+    await loadOverview(true);
+    loadGroups(); // 分组计数变了，下拉选项要跟着更新
+  } catch (e) {
+    // 404 = 账号已被移除：留在弹框里显示原话，让用户自己决定关不关。
+    $('metaErr').hidden = false;
+    $('metaErr').textContent = '保存失败：' + e.message;
+  } finally { b.disabled = false; }
+};
+// 两个输入回车即保存（弹框里只有两行，没必要再去点按钮）。
+$('metaGroup').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnMetaSave').click(); } });
+$('metaNote').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnMetaSave').click(); } });
 
 $('btnCheckinAll').onclick = async () => {
   try { await api('checkin_all', { method: 'POST' }); toast('全部签到已开始，结果见日志', 'ok'); }
@@ -1562,6 +1747,7 @@ function openAdd() {
   $('addLoad').hidden = true; $('addReady').hidden = true;
   $('addDone').hidden = true; $('addErr').hidden = true;
   $('importDone').hidden = true; $('importErr').hidden = true;
+  $('importGroup').value = '';
   $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
   $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
@@ -1687,6 +1873,9 @@ $('importFile').onchange = async () => {
   $('importDone').hidden = true; $('importErr').hidden = true;
   const fd = new FormData();
   fd.append('file', file);
+  // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
+  const importGroup = ($('importGroup').value || '').trim();
+  if (importGroup) fd.append('group', importGroup);
   const h = {};
   const k = localStorage.getItem(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
@@ -1701,6 +1890,7 @@ $('importFile').onchange = async () => {
     }
     invalidatePackages();
     loadOverview(true);
+    loadGroups();
   } catch (e) {
     $('importErr').hidden = false;
     $('importErr').textContent = '导入失败：' + e.message;
@@ -1726,6 +1916,8 @@ $('btnRefresh').onclick = async () => {
 function refreshVisible() {
   if (view === 'accounts') {
     loadOverview(true);
+    // 分组计数（total/healthy）是服务端内存聚合，不打上游；随账号池一起走 5s 刷新。
+    loadGroups();
   }
   else if (view === 'logs') loadLogs();
   else if (view === 'taskscenter') {
@@ -1737,6 +1929,7 @@ function refreshVisible() {
 }
 function start() {
   loadOverview(true);
+  loadGroups();
   if (refTimer) clearInterval(refTimer);
   refTimer = setInterval(refreshVisible, 5000);
   checkAuthGate();

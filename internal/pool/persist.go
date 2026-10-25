@@ -180,6 +180,8 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			softStreak:               s.SoftStreak,
 			sessionDeadFails:         s.SessionDeadFails,
 			consecutiveFails:         s.ConsecutiveFails,
+			group:                    s.Group,
+			note:                     s.Note,
 		}
 		// 亚积分余量合法性：越界/非有限值（旧数据或手改）清 0，保守回退整数口径。
 		if math.IsNaN(e.creditsRemainder) || math.IsInf(e.creditsRemainder, 0) || e.creditsRemainder < -0.5 || e.creditsRemainder >= 0.5 {
@@ -352,6 +354,8 @@ func (p *Pool) stateOverviewLocked() stateFile {
 			CreditsEarliestExpiry:    e.creditsEarliestExpiry,
 			CreditsEarliestRemaining: e.creditsEarliestRemaining,
 			CreditsExpiryBuckets:     append([]ExpiryBucket(nil), e.expiryBuckets...),
+			Group:                    e.group,
+			Note:                     e.note,
 		}
 		// 账号级冷却字段：仅禁用或仍在冷却时限内落盘（与熔断/降权同款惰性清洗）。
 		// 软冷却按墙钟到期、字段本身不清理，无条件落盘会让过期 reason 在 state.json 里
