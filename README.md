@@ -250,7 +250,7 @@ flowchart LR
 - **Docker + Docker Compose**（服务端部署方式，镜像内已含低权限用户与全部工具脚本）——或
 - **Windows / macOS / Linux 直接跑单文件二进制**（无需 Docker，见下方「Windows 单文件运行」）
 - 一个或多个已注册的 CodeBuddy 账号，用于 OAuth 登录
-- 宿主机 Go ≥ 1.22（仅从源码构建时需要）
+- 宿主机 Go ≥ 1.26（仅从源码构建时需要，版本以 `go.mod` 为准）
 
 ### 🤖 给 AI Agent 的安装声明
 
@@ -279,36 +279,16 @@ curl -s -H "Authorization: Bearer <api_key>" http://127.0.0.1:7863/v1/models
 
 **未就绪时如实上报阻塞点**（缺账号 / 挂载目录权限 / 端口占用），`/healthz` 返回 503 且 `total:0` 是**预期中间态**，不要重复重启刷状态。
 
-### 方式〇：GHCR 镜像（免克隆免构建）
-
-CI 会自动构建多架构镜像（`amd64` / `arm64`）并发布到 GHCR：
-
-```bash
-# 1. 准备配置与数据目录
-mkdir -p auths data && cp config.example.json config.json
-#    建议编辑 config.json 设置 api_key（或留空由程序自动生成随机密钥）
-
-# 2. 拉取并运行
-docker run -d --name workbuddy2api \
-  -p 7863:7863 -e TZ=Asia/Shanghai \
-  -v ./auths:/app/auths -v ./data:/app/data -v ./config.json:/app/config.json \
-  ghcr.io/misakano7545/workbuddy2api-panel:latest
-
-# 3. 健康检查（无可用账号时返回 503）
-curl -s http://localhost:7863/healthz
-```
-
-> **首次发布后须将包设为公开**：GitHub 仓库页 → Packages → `workbuddy2api-panel` →
-> Package settings → Change visibility → Public，否则拉取需要 `docker login ghcr.io`。
->
-> 镜像 tag：`main` 推 `latest` / `main` / `sha-xxxxxx`。日期版 `v2026.9.26.711` 不是语义化版本，不会额外打 `1.2.3` 这种 tag。PR 只构建、不推送。
-
 ### 方式一：Docker Compose（推荐服务器部署）
 
+> **不想克隆源码？** CI 也把镜像发到 `ghcr.io/nothing688/workbuddy-plus:latest`（amd64 / arm64 多架构）。
+> 把 compose 里的 `build:` 换成 `image: ghcr.io/nothing688/workbuddy-plus:latest`，再 `docker compose up -d` 即可；
+> 包若仍为私有，拉取前需要 `docker login ghcr.io`。镜像另有 `sha-xxxxxx` 标签，`v2026.x` 发布日期版不是语义化版本，不会额外打 `1.2.3`。
+
 ```bash
-# 1. 克隆
-git clone https://github.com/misakano7545/workbuddy2api-panel.git
-cd workbuddy2api-panel
+# 1. 克隆本仓
+git clone https://github.com/nothing688/workbuddy-plus.git
+cd workbuddy-plus
 
 # 2. 准备配置（compose 挂载此文件，缺失会导致容器启动失败）
 cp config.example.json config.json
@@ -335,7 +315,7 @@ docker compose down             # 停止并移除容器（数据在 ./auths 与 
 ### 方式二：Windows 单文件运行（无需 Docker）
 
 ```powershell
-# 1) 下载 Release 中的 wb2api.exe，或从源码构建
+# 1) 下载 Release 里的 windows 包（wb2api-panel-<版本>-windows-amd64.zip，内含 wb2api.exe），或从源码构建
 go build -trimpath -ldflags="-s -w" -o wb2api.exe ./cmd/server
 
 # 2) 直接运行：首次启动自动生成 config.json（含随机 api_key，日志打印一次）
@@ -528,6 +508,11 @@ curl -s http://localhost:7863/v1/responses \
 `WB2A_LISTEN` · `WB2A_API_KEY` · `WB2A_AUTH_DIR` · `WB2A_STATE_FILE` · `WB2A_MAX_BODY_MB` · `WB2A_SOFT_RATE`(duration) · `WB2A_SOFT_RATE_MAX`(duration) · `WB2A_TIMEOUT_SECONDS` · `WB2A_HEADER_TIMEOUT_SECONDS` · `WB2A_IDLE_TIMEOUT_SECONDS` · `WB2A_USER_AGENT` · `WB2A_SANITIZE_FINGERPRINTS`(bool) · `WB2A_PROMPT_MODE` · `WB2A_PROMPT_FILE`
 
 ## 核心行为语义
+
+> 错误分类与账号处置、选号、粘性、定时任务的实现细节，排查问题或读代码时再展开。
+
+<details>
+<summary>展开：核心行为语义全文（9 个主题）</summary>
 
 ### 系统提示词体系
 
@@ -791,6 +776,8 @@ WARN: [server] stream ...: saw M native tool call block(s) but repaired none (to
 - 限速：账号间间隔 800ms
 - 每自然日 1 次派出：按 CST（Asia/Shanghai）自然日重置，与容器 `TZ` 无关
 - 失败隔离：单账号失败只跳过该账号当趟；401 不强刷（token 刷新交保活时点）
+
+</details>
 
 ## 后台刷新与补领清扫
 
@@ -1119,6 +1106,11 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 
 ## 关键断言 ↔ 代码出处
 
+> 每条结论对应的实现位置，供 review / 排障比对。
+
+<details>
+<summary>展开：断言与代码位置对照表</summary>
+
 | 断言 | 出处 |
 |---|---|
 | `prompt.mode` 默认 `custom` | `cmd/server/config.go:148` |
@@ -1143,6 +1135,8 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 | streak 端点 `activity/growth/streak` | `internal/upstream/travel.go:24`（常量）、`:139`（`GrowthStreak`） |
 | Redis 粘性镜像 7 天 TTL | `internal/redisstore/redisstore.go:21` |
 | 静态模型表含 `deepseek-v4-flash` 等 | `internal/server/handler.go:146` |
+
+</details>
 
 ## 免责声明
 
