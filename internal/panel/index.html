@@ -306,18 +306,18 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
    导致 vertical-align:middle 失效（按钮整体偏上、行线不齐）。这里强制恢复
    table-cell，让该列和其他列一样参与行高与垂直居中；按钮排列交给内层 .acts-inner。 */
 td.acts { display: table-cell; vertical-align: middle; text-align: right; }
-/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 测试 / 探活 / 选号 / 禁用 / 移除），
+/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 测试 / 选号 / 禁用 / 移除），
    缺哪个留空槽。否则「解冻 / 暂停选号 / 恢复选号」互斥会改变按钮个数，整列左右错位。
    分列放在内层 div：td 保持 table-cell，vertical-align:middle 才继续生效
    （直接给 td 设 display:grid 会退出表格布局，按钮变顶对齐）。 */
-.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); gap: 5px; justify-content: end; align-items: center; }
+.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(2, 54px); gap: 5px; justify-content: end; align-items: center; }
 /* 统一盒模型：primary 与 ghost 的边框/行高不同会让「解冻」行比「暂停选号」行高 2~3px，
    行线因此参差。固定高度 + border-box 后每行等高、按钮底边对齐。 */
 .acts-inner button { width: 100%; height: 26px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 
-/* ── 分组 / 备注 / 可用性测试 ──────────────────────────────────────
-   分组用徽章（点击即开编辑弹框，和备注共用同一个 meta 弹框）；备注平时是一行可点
-   文本，空值用淡色占位。两者都不新建表格列之外的控件，避免行高参差。 */
+/* ── 分组 / 名称备注 / 可用性测试 ──────────────────────────────────
+   分组用徽章（点击即开编辑弹框）；「备注」就是账号名称备注——直接显示在名字前面，
+   不单独占一列，点名字即可编辑（原昵称以 .rm-ghost 浅色跟随）。 */
 .grp-cell { min-width: 86px; }
 .grp-badge {
   display: inline-block; max-width: 150px; padding: 1px 9px; border-radius: 999px;
@@ -328,14 +328,9 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 }
 .grp-badge:hover:not(:disabled) { border-color: var(--accent); }
 .grp-badge.none { color: var(--ink-3); background: var(--surface-2); border-color: var(--line); }
-.note-cell { max-width: 190px; }
-.note-edit {
-  display: block; max-width: 100%; padding: 0; border: 0; background: none; text-align: left;
-  font-size: 12.5px; line-height: 1.4; color: var(--ink-2);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.note-edit.empty { color: var(--ink-3); }
-.note-edit:hover:not(:disabled) { color: var(--accent); text-decoration: underline; }
+/* 账号名：整块可点开「名称备注」编辑框；按钮化只为可点击，不改变排版。 */
+.nm-btn { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.nm-btn:hover:not(:disabled) { text-decoration: underline dotted; text-underline-offset: 3px; }
 /* 测试结果行：挂在账号行下方整行展开，reply 用 <details> 收着，不挤占表格列宽。 */
 .acc tr.probe-row td { padding: 0 11px 10px 15px; background: transparent; }
 .probe-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; }
@@ -847,7 +842,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <table class="acc">
           <thead><tr>
             <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>分组</th><th>备注</th><th>状态</th><th>积分</th>
+            <th>账号</th><th>分组</th><th>状态</th><th>积分</th>
             <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
@@ -1787,23 +1782,23 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   </div>
 </div>
 
-<!-- 分组与备注：写回后端（POST /accounts/{uid}/meta），与上面「备注」按钮的本机备注
-     是两套——本机备注只改展示名，这里的分组/备注是账号池的共享元数据。 -->
+<!-- 账号名称备注与分组：写回后端（POST /accounts/{uid}/meta）。
+     名称备注就是「账号备注」——显示在账号名前面替代原昵称，不单独占一列。 -->
 <div class="veil" id="metaVeil">
   <div class="dlg" style="width:460px">
     <header>
-      <h3>分组与备注</h3>
+      <h3>账号名称与分组</h3>
       <div class="hint" id="metaWho"></div>
     </header>
     <div class="body">
+      <label class="fld"><span class="lb">账号名称备注</span>
+        <input id="metaNote" placeholder="留空 = 恢复原昵称" autocomplete="off">
+        <span class="hint">显示在账号名前面（原昵称变灰跟在后面）；保存后所有打开面板的人都能看到。</span>
+      </label>
       <label class="fld"><span class="lb">分组</span>
         <input id="metaGroup" list="metaGroupList" placeholder="留空 = 未分组" autocomplete="off">
         <datalist id="metaGroupList"></datalist>
         <span class="hint">同组账号可在账号池顶部按分组筛选；名字相同的账号自动归为一组。</span>
-      </label>
-      <label class="fld"><span class="lb">备注</span>
-        <input id="metaNote" placeholder="留空 = 清除备注" autocomplete="off">
-        <span class="hint">给运营看的说明（用途、归属人、采购批次等），保存后所有打开面板的人都能看到。</span>
       </label>
       <div class="state err" id="metaErr" hidden></div>
     </div>

@@ -472,7 +472,7 @@ setTimeout(() => {
 function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="big">' +
+    tb.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="big">' +
       (filtered ? '该分组下还没有账号' : '账号池是空的') + '</div>' +
       (filtered ? '换一个分组，或点账号行上的分组徽章调整归属' : '点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') +
       '</div></td></tr>';
@@ -547,20 +547,24 @@ function renderAccounts(list, filtered, probe) {
     const latency = formatLatency(tu.last_latency_ms);
     const rate = formatRate(tu.last_tokens_per_second);
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
-    // 分组 / 备注（后端 meta，全端共享）。两个单元格都只是按钮：点一下开编辑弹框，
-    // 省掉再找入口的成本；未分组与空备注用淡色占位，扫视时一眼能看出「没填」。
+    // 分组徽章（后端 meta，全端共享）：点一下开编辑弹框。
+    // 名称备注不单独占列——它直接显示在账号名前面（原昵称变灰跟随），点名字即可编辑。
     const grp = String(s.group == null ? '' : s.group);
     const noteText = String(s.note == null ? '' : s.note);
     const grpCell = '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="meta" data-f="group" data-u="' + esc(s.uid) +
       '" title="' + esc(grp ? '分组：' + grp + '（点击修改）' : '未分组（点击设置）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
-    const noteCell = '<button class="note-edit' + (noteText ? '' : ' empty') + '" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
-      '" title="' + esc(noteText ? noteText : '点击添加备注') + '">' + (noteText ? esc(noteText) : '添加备注') + '</button>';
+    const nickHtml = s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>';
+    const nameHtml = noteText
+      ? esc(noteText) + '<span class="rm-ghost">' + nickHtml + '</span>'
+      : remarkName(s.uid, nickHtml);
+    const nameCell = '<button class="nm-btn" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
+      '" title="' + esc(noteText ? '名称备注：' + noteText + '（点击修改）' : '点击添加账号名称备注') + '">' + nameHtml + '</button>';
     // 可用性测试的结果挂在账号行下方整行：reply 常是多行，塞进列里会把行撑变形。
     const pr = prs[s.uid] || null;
     let probeRow = '';
     if (pr) {
       const lat = formatLatency(pr.latency_ms);
-      probeRow = '<tr class="probe-row"><td colspan="11"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
+      probeRow = '<tr class="probe-row"><td colspan="10"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
         (pr.ok
           ? '<span class="tag ok">可用' + (lat === '—' ? '' : ' · ' + esc(lat)) + '</span>'
           : '<span class="tag bad">不可用</span><span>' + esc(pr.error || '测试失败（无错误信息）') + '</span>') +
@@ -570,9 +574,8 @@ function renderAccounts(list, filtered, probe) {
     }
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + nameCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td class="grp-cell">' + grpCell + '</td>' +
-      '<td class="note-cell">' + noteCell + '</td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -596,12 +599,15 @@ function renderAccounts(list, filtered, probe) {
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>',
         (personal ?
           '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : ''),
-        // 「测试」向上游发一次极小对话（probe_chat），只读、不改池状态；测试中禁用按钮
-        // 防重复点击（状态在 probeBusy 里，5s 重渲染也不会把「测试中」冲掉）。
+        // 统一的「测试」：正常号发一次极小对话（probe_chat），封禁/冷却号走只读解封探测
+        // （probe_ban）——两者都是「这号现在能不能用」，只保留一个入口，不再并排两个按钮。
         (pb[s.uid]
-          ? '<button class="xs ghost" data-a="probe_chat" data-u="' + esc(s.uid) + '" disabled>测试中</button>'
-          : '<button class="xs ghost" data-a="probe_chat" data-u="' + esc(s.uid) + '" title="向上游发一次极小对话，确认该账号此刻真的可用">测试</button>'),
-        (frozen ? '<button class="xs ghost" data-a="probe_ban" data-u="' + esc(s.uid) + '" title="只读探测上游是否已解封：不 revive、不参与选号、不改任何状态">探活</button>' : ''),
+          ? '<button class="xs ghost" data-a="probe" data-u="' + esc(s.uid) + '" disabled>测试中</button>'
+          : '<button class="xs ghost" data-a="probe" data-u="' + esc(s.uid) + '"' +
+            (frozen
+              ? ' title="只读探测上游是否已解封：不 revive、不参与选号、不改任何状态"'
+              : ' title="向上游发一次极小对话，确认该账号此刻真的可用"') +
+            '>测试</button>'),
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')),
@@ -791,6 +797,26 @@ $('accBody').addEventListener('click', async ev => {
     } else if (a === 'balance') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/balance', { method: 'POST' });
       toast('余额已更新：' + r.credits + (r.credits_total > 0 ? ' / ' + r.credits_total : ''), 'ok');
+    } else if (a === 'probe') {
+      // 统一入口：封禁/冷却号做解封探测（只读），在池号做真实对话测试。
+      const acc = acctStateOf(u) || {};
+      const frozenNow = !!acc.disabled || !!acc.cooling || (acc.cool_remaining_sec || 0) > 0;
+      if (frozenNow) {
+        const r = await api('accounts/' + encodeURIComponent(u) + '/probe_ban', { method: 'POST' });
+        const map = {
+          lifted: ['已解封，可以点「解冻」恢复使用', 'ok'],
+          still_banned: ['仍被封禁，继续等待（勿反复 revive，可能加重风控）', 'warn'],
+          blocked: ['会话仍有效，但被上游风控拦截（可能仍是封禁）—— 继续观察', 'warn'],
+          session_dead: ['不是封禁问题 —— 登录态失效，需重新登录', 'warn'],
+          inconclusive: ['探测无明确结论（网络/限流等），稍后再试', 'warn'],
+          unknown: ['无法探测：上游客户端未配置', 'err'],
+        };
+        const m = map[r.verdict] || [r.verdict + (r.detail ? '：' + r.detail : ''), 'warn'];
+        toast(m[0], m[1]);
+        return;
+      }
+      await runProbeChat(u);
+      return;
     } else if (a === 'probe_ban') {
       // 只读探测：后端不改任何池状态，所以这里**不刷新** overview（没有变化）。
       // 结论用 toast 说清处置动作，而不是只报一句「仍被封」——运维要知道下一步做什么。
