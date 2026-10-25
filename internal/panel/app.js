@@ -11,6 +11,11 @@ let overviewData = null, cfgLoaded = null;
    tbody，这些必须存在 DOM 之外，否则刚测出来的结果、刚选的分组会被下一轮刷新抹掉。
    accGroupFilter：null = 全部；'' = 未分组；其它 = 分组名。 */
 let groupsData = [], accGroupFilter = null, metaUID = null;
+/* 默认调用池（服务端 state.json 的 active_group）。空串 = 全池；null = 还没从
+   /pool/active 读到。poolGroups 是该接口顺带回的分组计数，只用于切换下拉；
+   activePoolReady 保证「筛选自动跟到当前池」只在首次加载发生一次，之后 5s
+   轮询更新徽章但绝不动用户手动选的筛选。 */
+let activePool = null, poolGroups = [], activePoolReady = false;
 const probeBusy = Object.create(null), probeResult = Object.create(null);
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
@@ -548,15 +553,17 @@ function renderAccounts(list, filtered, probe) {
     const rate = formatRate(tu.last_tokens_per_second);
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     // 分组徽章（后端 meta，全端共享）：点一下开编辑弹框。
-    // 名称备注不单独占列——它直接显示在账号名前面（原昵称变灰跟随），点名字即可编辑。
+    // 名称备注同样来自后端 meta（全端共享）：有服务端备注 → 备注名 + 原昵称浅灰跟随；
+    // 没有备注 → 只显示原昵称。账号池不再用本机 localStorage 备注（remarkName）
+    // 覆盖名称——那会让同一账号在不同设备上名字不一致；用量明细等视图保持原样。
     const grp = String(s.group == null ? '' : s.group);
     const noteText = String(s.note == null ? '' : s.note);
-    const grpCell = '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="meta" data-f="group" data-u="' + esc(s.uid) +
-      '" title="' + esc(grp ? '分组：' + grp + '（点击修改）' : '未分组（点击设置）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
+    const grpCell = '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
+      '" title="' + esc(grp ? '分组：' + grp + '（点击移动到其他组）' : '未分组（点击入组）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
     const nickHtml = s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>';
     const nameHtml = noteText
       ? esc(noteText) + '<span class="rm-ghost">' + nickHtml + '</span>'
-      : remarkName(s.uid, nickHtml);
+      : nickHtml;
     const nameCell = '<button class="nm-btn" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
       '" title="' + esc(noteText ? '名称备注：' + noteText + '（点击修改）' : '点击添加账号名称备注') + '">' + nameHtml + '</button>';
     // 可用性测试的结果挂在账号行下方整行：reply 常是多行，塞进列里会把行撑变形。
@@ -643,6 +650,59 @@ async function loadGroups() {
   renderGroupFilter();
 }
 
+// poolLabel 调用池的展示名：空串 = 全池，而不是显示成空白。
+function poolLabel(name) { return name ? name : '全池'; }
+
+// loadPoolActive 读默认调用池（GET /pool/active）。groups 顺带回分组计数，
+// 用作切换下拉的选项。失败保留旧状态：读不到时不假装「全池」，也不冲筛选。
+//
+// 首次成功加载才把账号列表的「分组筛选」跟到当前池（让运维一眼看到该池状态）；
+// 之后 5s 轮询只更新徽章与下拉，绝不覆盖用户手动选的筛选。
+async function loadPoolActive() {
+  try {
+    const d = await api('pool/active');
+    activePool = String(d && d.group != null ? d.group : '');
+    poolGroups = Array.isArray(d && d.groups) ? d.groups.filter(g => g && typeof g === 'object') : [];
+    const first = !activePoolReady;
+    activePoolReady = true;
+    renderPoolActive();
+    if (first) {
+      accGroupFilter = activePool ? activePool : null;
+      renderGroupFilter();
+      paintAccounts();
+    }
+  } catch (e) { /* 后端未就绪：保持界面原状，下一轮再试 */ }
+}
+
+// renderPoolActive 画「当前调用池」区块：徽章与分组徽章同视觉语言，下拉只是
+// 待切换的候选——不点「切换」不发请求。
+function renderPoolActive() {
+  const badge = $('poolActiveBadge');
+  if (badge) {
+    badge.textContent = poolLabel(activePool);
+    badge.classList.toggle('none', !activePool);
+    badge.title = activePool
+      ? '当前调用池：' + activePool + '（不带分组参数的请求走该组）'
+      : '当前调用池：全池（不带分组参数的请求可在任意分组选号）';
+  }
+  const sel = $('poolActiveSelect');
+  if (!sel) return;
+  const opt = (v, text) => '<option value="' + esc(v) + '">' + esc(text) + '</option>';
+  const names = [];
+  for (const g of poolGroups) {
+    const name = String(g.name == null ? '' : g.name);
+    // 空名 = 未分组，不能作为调用池（后端空串表示全池），故不列。
+    if (name && names.indexOf(name) < 0) names.push(name);
+  }
+  // 当前池可能还没账号（GroupCounts 不会出现它），补一项，否则下拉显示不出当前值。
+  if (activePool && names.indexOf(activePool) < 0) names.push(activePool);
+  sel.innerHTML = opt('__all__', '全池') + names.map(name => {
+    const g = poolGroups.find(x => String(x.name == null ? '' : x.name) === name);
+    return opt(name, name + (g ? '（' + (g.total || 0) + ' 个 · ' + (g.healthy || 0) + ' 可用）' : '（无账号）'));
+  }).join('');
+  sel.value = activePool ? activePool : '__all__';
+}
+
 // groupCountText 当前选中分组的 total/healthy；下拉收起后这行仍在，不用展开才知道人数。
 function groupCountText() {
   if (accGroupFilter == null) return '';
@@ -657,7 +717,10 @@ function renderGroupFilter() {
   const sel = $('accGroupFilter');
   if (!sel) return;
   const has = accGroupFilter == null || groupsData.some(g => String(g.name == null ? '' : g.name) === accGroupFilter);
-  if (!has) accGroupFilter = null; // 分组被改名/清空 → 回落到全部
+  // 未分组不存在时才回落「全部」；非空分组名即使暂时没账号也保留选中（可能是刚切到
+  // 的调用池），并补一个 0 计数的选项，否则「筛选自动跟到该池」会被下一轮刷新冲掉。
+  if (!has && (accGroupFilter == null || accGroupFilter === '')) accGroupFilter = null;
+  const missing = accGroupFilter != null && accGroupFilter !== '' && !has;
   const total = groupsData.reduce((a, g) => a + (g.total || 0), 0);
   const healthy = groupsData.reduce((a, g) => a + (g.healthy || 0), 0);
   const opt = (v, label) => '<option value="' + esc(v) + '">' + esc(label) + '</option>';
@@ -667,7 +730,8 @@ function renderGroupFilter() {
       const name = String(g.name == null ? '' : g.name);
       return opt(name === '' ? '__none__' : name,
         (name || '未分组') + '（' + (g.total || 0) + ' 个 · ' + (g.healthy || 0) + ' 可用）');
-    }).join('');
+    }).join('') +
+    (missing ? opt(accGroupFilter, accGroupFilter + '（0 个 · 0 可用）') : '');
   sel.value = accGroupFilter == null ? '__all__' : (accGroupFilter === '' ? '__none__' : accGroupFilter);
   if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
   // 下拉与导入页共用同一份分组名候选（datalist 只在输入时弹提示，不限制自由填写）。
@@ -711,6 +775,60 @@ function openMeta(uid, field) {
   $('metaVeil').classList.add('on');
   setTimeout(() => (field === 'note' ? $('metaNote') : $('metaGroup')).focus(), 60);
 }
+
+/* ── 移动到其他分组 ────────────────────────────────────────────────
+   点账号行的分组徽章直接选目标组：切组不改调用池（active group 要显式切换），
+   只改这个账号的归属；保存走 partial meta（只传 group，不动名称备注）。 */
+let grpMoveUID = null;
+function openGroupPicker(uid) {
+  grpMoveUID = uid;
+  const acc = acctStateOf(uid) || {};
+  const cur = String(acc.group == null ? '' : acc.group);
+  $('grpWho').textContent = (acc.nickname || '未命名') + ' · ' + String(uid);
+  $('grpErr').hidden = true;
+  $('grpNew').value = '';
+  // 候选 = 现有分组去掉当前组；始终给「未分组」，并保留当前组标记
+  const names = (groupsData || []).map(g => String(g.name || '')).filter(n => n !== cur);
+  const chips = names.map(n =>
+    '<button class="xs ghost grp-pick" data-g="' + esc(n) + '">' + (n ? esc(n) : '未分组') + '</button>');
+  $('grpList').innerHTML = chips.length ? chips.join('') : '<span class="hint">暂无其他分组</span>';
+  $('grpVeil').classList.add('on');
+}
+async function moveGroupTo(name) {
+  const uid = grpMoveUID;
+  if (!uid) return;
+  const err = $('grpErr');
+  err.hidden = true;
+  try {
+    // 只提交 group：后端 meta 用指针字段区分“没传”，名称备注不会被清掉。
+    await api('accounts/' + encodeURIComponent(uid) + '/meta', {
+      method: 'POST',
+      body: JSON.stringify({ group: name || '' }),
+    });
+    $('grpVeil').classList.remove('on');
+    toast(name ? '已移动到分组 ' + name : '已移出分组（未分组）', 'ok');
+    await loadOverview(true);
+    await loadGroups();
+  } catch (e) {
+    err.textContent = e.message;
+    err.hidden = false;
+  }
+}
+// 单测的 DOM 桩只提供部分元素：绑定处逐个判空，避免顶层求值抛错。
+if ($('grpList')) {
+  $('grpList').addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-g]');
+    if (!b) return;
+    moveGroupTo(b.dataset.g);
+  });
+}
+if ($('btnGrpCancel')) $('btnGrpCancel').onclick = () => $('grpVeil').classList.remove('on');
+if ($('btnGrpSave')) $('btnGrpSave').onclick = () => {
+  const v = ($('grpNew').value || '').trim();
+  if (!v) { moveGroupTo(''); return; }
+  moveGroupTo(v);
+};
+if ($('grpNew')) $('grpNew').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnGrpSave').click(); } });
 
 // renderModelLocks 模型锁池：哪些模型不能用、锁了几个号、还要锁多久。后端已按
 // 「整池不可用 → 此刻没号 → 部分限流」排好序，这里只做展示（移植上游 PR #120）。
@@ -785,6 +903,7 @@ $('accBody').addEventListener('click', async ev => {
   // 分组/备注编辑与可用性测试都不走下面的「操作 → 刷新 overview」流程：
   // 前者开弹框、后者只改行内结果（池状态没变，刷 overview 纯属浪费）。
   if (a === 'meta') { openMeta(u, b.dataset.f); return; }
+  if (a === 'movegroup') { openGroupPicker(u); return; }
   if (a === 'probe_chat') { runProbeChat(u); return; }
   if (a === 'remove' && !confirm('移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
@@ -865,6 +984,40 @@ $('accGroupFilter').onchange = () => {
   accGroupFilter = v === '__all__' ? null : (v === '__none__' ? '' : v);
   paintAccounts();
   if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
+};
+
+/* ── 当前调用池（默认选号组）────────────────────────────────────────
+   下拉改变**不**发请求：运维可以慢慢挑，只有点「切换」才落库。成功后才把账号
+   列表筛选跟到该池；此后用户手动改筛选只影响查看，不影响路由。 */
+$('btnPoolActive').onclick = async () => {
+  const sel = $('poolActiveSelect');
+  if (!sel) return;
+  const target = sel.value === '__all__' ? '' : sel.value;
+  const b = $('btnPoolActive');
+  b.disabled = true;
+  b.title = '切换中…';
+  try {
+    const r = await api('pool/active', { method: 'POST', body: JSON.stringify({ group: target }) });
+    activePool = String(r && r.group != null ? r.group : '');
+    activePoolReady = true;
+    renderPoolActive();
+    // 切换成功 → 列表筛选自动跟到该池（方便立刻看状态）。这只是查看范围，
+    // 路由已经由服务端 active_group 决定；用户随后手动改筛选不会改变路由。
+    accGroupFilter = activePool ? activePool : null;
+    renderGroupFilter();
+    paintAccounts();
+    toast('调用池已切换为 ' + poolLabel(activePool), 'ok');
+    await loadOverview(true);
+    loadGroups();
+    loadPoolActive();
+  } catch (e) {
+    // 失败保留原选择：下拉回到服务端当前值，不把「看起来切了」留在界面上。
+    renderPoolActive();
+    toast('切换调用池失败：' + e.message, 'err');
+  } finally {
+    b.disabled = false;
+    b.title = '选好分组后点此切换（下拉本身不会生效）';
+  }
 };
 
 function closeMeta() { $('metaVeil').classList.remove('on'); metaUID = null; }
@@ -1944,6 +2097,9 @@ function refreshVisible() {
     loadOverview(true);
     // 分组计数（total/healthy）是服务端内存聚合，不打上游；随账号池一起走 5s 刷新。
     loadGroups();
+    // 调用池可能被另一台设备改过：刷新徽章/下拉，但 loadPoolActive 只在首次
+    // 加载时改筛选，不会冲掉用户手动选的查看范围。
+    loadPoolActive();
   }
   else if (view === 'logs') loadLogs();
   else if (view === 'taskscenter') {
@@ -1954,6 +2110,8 @@ function refreshVisible() {
   }
 }
 function start() {
+  // 先读默认调用池再拉账号：首次加载的筛选才能直接落在当前池上。
+  loadPoolActive();
   loadOverview(true);
   loadGroups();
   if (refTimer) clearInterval(refTimer);

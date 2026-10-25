@@ -328,9 +328,25 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 }
 .grp-badge:hover:not(:disabled) { border-color: var(--accent); }
 .grp-badge.none { color: var(--ink-3); background: var(--surface-2); border-color: var(--line); }
+/* 当前调用池：账号池卡片头部下方的常驻条。徽章复用 .grp-badge，与每行分组徽章
+   同一视觉语言；下拉只选候选，必须点「切换」才落库。 */
+.pool-active {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 17px; border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(90deg, var(--accent-soft), transparent 60%);
+}
+.pool-active .lbl { font-size: 12px; color: var(--ink-3); }
+.pool-active .hint { font-size: 11.5px; color: var(--ink-3); }
+.pool-active .grp-badge { max-width: 220px; }
+.pool-active .grow { flex: 1; }
+.pool-active select { width: auto; padding: 4px 9px; font-size: 12.5px; border-radius: 6px; }
+.pool-active .sel-note select { padding-right: 24px; font-size: 12px; }
 /* 账号名：整块可点开「名称备注」编辑框；按钮化只为可点击，不改变排版。 */
 .nm-btn { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .nm-btn:hover:not(:disabled) { text-decoration: underline dotted; text-underline-offset: 3px; }
+/* 移动分组弹框：候选组做成一行行可点的胶囊，避免再手打组名 */
+.grp-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.grp-pick { padding: 4px 12px; border-radius: 999px; }
 /* 测试结果行：挂在账号行下方整行展开，reply 用 <details> 收着，不挤占表格列宽。 */
 .acc tr.probe-row td { padding: 0 11px 10px 15px; background: transparent; }
 .probe-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; }
@@ -838,6 +854,18 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnActivityAll">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll">全部保活</button>
         </header>
+        <!-- 当前调用池：不带分组参数的请求走这里。徽章常驻，切换后才生效；
+             下拉改变不发请求，避免挑选项时把线上路由切来切去。 -->
+        <div class="pool-active">
+          <span class="lbl">当前调用池</span>
+          <span class="grp-badge none" id="poolActiveBadge" title="当前调用池：全池">全池</span>
+          <span class="hint">不带分组参数的请求走这里</span>
+          <span class="grow"></span>
+          <label class="sel-note" title="选择要切到的分组；选择本身不会生效，需点「切换」">切换为
+            <select id="poolActiveSelect"><option value="__all__">全池</option></select>
+          </label>
+          <button class="xs primary" id="btnPoolActive" title="选好分组后点此切换（下拉本身不会生效）">切换</button>
+        </div>
         <div class="tbl-wrap">
         <table class="acc">
           <thead><tr>
@@ -1806,6 +1834,28 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <span class="grow"></span>
       <button id="btnMetaCancel">取消</button>
       <button class="primary" id="btnMetaSave">保存</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 移动到其他分组：点分组徽章打开，选现有分组或输入新组名；只改归属，不切调用池 -->
+<div class="veil" id="grpVeil">
+  <div class="dlg" style="width:440px">
+    <header>
+      <h3>移动到分组</h3>
+      <div class="hint" id="grpWho"></div>
+    </header>
+    <div class="body">
+      <div class="grp-picks" id="grpList"></div>
+      <label class="fld" style="margin-top:10px"><span class="lb">新建分组</span>
+        <input id="grpNew" placeholder="输入新组名；留空 = 移出分组" autocomplete="off">
+      </label>
+      <div class="state err" id="grpErr" hidden></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnGrpCancel">取消</button>
+      <button class="primary" id="btnGrpSave">确定</button>
     </footer>
   </div>
 </div>

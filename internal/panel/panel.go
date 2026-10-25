@@ -223,6 +223,10 @@ func (p *Panel) routes() {
 	// 分组 / 备注（运维自定义元数据）与分组聚合列表。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/meta", p.withAuth(p.accountSetMeta))
 	p.mux.HandleFunc("GET /panel/api/groups", p.withAuth(p.groupsList))
+	// 默认调用池（不带分组参数的请求走哪个组）。GET 读当前值 + 分组计数，
+	// POST 切换（空串 = 全池）；写入落 pool 的 state.json，重启后保留。
+	p.mux.HandleFunc("GET /panel/api/pool/active", p.withAuth(p.poolActiveGet))
+	p.mux.HandleFunc("POST /panel/api/pool/active", p.withAuth(p.poolActiveSet))
 	// 可用性测试：真发一条最小对话（只读探测，不记失败/不冷却/不占在途）。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/probe_chat", p.withAuth(p.accountProbeChat))
 	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))

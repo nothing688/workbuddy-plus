@@ -36,6 +36,33 @@ func (p *Pool) SetMeta(uid, group, note string) bool {
 	return true
 }
 
+// SetActiveGroup 切换默认调用池（active group）：不带分组参数的请求将走该组。
+//
+// 语义（与 SetMeta 同款取舍）：
+//   - 值 TrimSpace 后比较；与当前值相同 → 不置 dirty（无变更不落盘）；
+//   - 空串 = 清除（回到全池选号，与引入该字段前逐字一致）；
+//   - 不校验分组是否存在：组名可先于账号配置（切到一个空组只会让请求报
+//     no_account_in_group，等运维把号移进来即可），也避免与 SetMeta 抢锁顺序。
+//
+// 持久化走既有 dirty + saveLocked 路径（state.json 的 active_group，Redis 快照同源）。
+func (p *Pool) SetActiveGroup(name string) {
+	name = strings.TrimSpace(name)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.activeGroup == name {
+		return
+	}
+	p.activeGroup = name
+	p.dirty.Store(true)
+}
+
+// ActiveGroup 返回当前默认调用池（空串 = 全池）。读锁，供 handler 每请求读取。
+func (p *Pool) ActiveGroup() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.activeGroup
+}
+
 // GroupInfo 单个分组的聚合视图（面板分组列表用）。
 type GroupInfo struct {
 	Name string `json:"name"` // 分组名；空串 = 未分组

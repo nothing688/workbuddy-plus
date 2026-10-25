@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
@@ -143,6 +144,8 @@ func (p *Pool) load() {
 		return
 	}
 	p.applyAccountsLocked(sf.Accounts)
+	// 默认调用池随 state.json 恢复（空串 = 全池，旧文件缺该字段即零值）。
+	p.activeGroup = strings.TrimSpace(sf.ActiveGroup)
 }
 
 // applyAccountsLocked 用持久化账号状态覆盖/插入 byUID（placeholder 凭证，Add 时换全）。
@@ -277,6 +280,9 @@ func (p *Pool) adoptSnapshot(s snapshot) {
 func (p *Pool) applySnapshotLocked(s snapshot) {
 	p.byUID = map[string]*entry{}
 	p.applyAccountsLocked(s.Accounts)
+	// 默认调用池与账号状态同源（snapshot 内嵌 stateFile）：采用快照时一并替换，
+	// 否则择新恢复后 active group 会停留在本地旧值，与快照里的账号分组不一致。
+	p.activeGroup = strings.TrimSpace(s.ActiveGroup)
 }
 
 // saveLocked 落盘当前状态（调用方须持 p.mu）。返回是否成功：调用方在"先清 dirty
@@ -333,7 +339,7 @@ func (p *Pool) notePersistFail(err error) {
 // stateOverviewLocked 收集当前内存状态为 stateFile（供落盘 + 快照镜像复用）。调用方必须已持 p.mu。
 func (p *Pool) stateOverviewLocked() stateFile {
 	now := time.Now()
-	sf := stateFile{Accounts: map[string]stateAccount{}}
+	sf := stateFile{Accounts: map[string]stateAccount{}, ActiveGroup: p.activeGroup}
 	for uid, e := range p.byUID {
 		s := stateAccount{
 			Credits:                  e.credits,

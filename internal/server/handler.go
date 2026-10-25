@@ -837,11 +837,18 @@ func (h *Handler) accountInGroup(uid, group string) bool {
 }
 
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
-	// 按分组选号的目标组（头优先，其次 query；空 = 未指定）。在 chat 内核入口解析
+	// 按分组选号的目标组（头优先，其次 query）。在 chat 内核入口解析
 	// 一次即可覆盖三种入站协议：/v1/responses 与 /v1/messages 都是 r.Clone 后转进
 	// 本函数，请求头与 query 原样保留（见 responses.go / messages.go）。
 	// 仅在选号/粘性/末端错误三处消费，/v1/models、/healthz、面板接口不经过这里。
+	//
+	// 显式参数（头/query）优先；都没给时退回**默认调用池** active group（面板里显式
+	// 切换到某个分组，不带参数的客户端自动落到它）。active group 为空 → 全池，
+	// 与引入该能力前逐字一致（零回归）。
 	group := requestGroup(r)
+	if group == "" && h.cfg.Pool != nil {
+		group = h.cfg.Pool.ActiveGroup()
+	}
 	if ok, why := h.budget.admit(); !ok {
 		used, limit, _, _ := h.budget.snapshot()
 		code, msg := "daily_budget_exceeded", fmt.Sprintf(

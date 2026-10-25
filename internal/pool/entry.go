@@ -629,8 +629,13 @@ type stateModelCost struct {
 }
 
 // stateFile 持久化格式。
+//
+// ActiveGroup 是「默认调用池」（显式切换的 active group）：不带分组参数的请求走它，
+// 空串 = 全池（与引入该字段前逐字一致）。与 Accounts 同文件、同一落盘/恢复路径，
+// Redis 快照经 snapshot 内嵌本结构一并往返，无需另设字段。
 type stateFile struct {
-	Accounts map[string]stateAccount `json:"accounts"`
+	Accounts    map[string]stateAccount `json:"accounts"`
+	ActiveGroup string                  `json:"active_group,omitempty"`
 }
 
 // flushInterval 后台落盘周期。
