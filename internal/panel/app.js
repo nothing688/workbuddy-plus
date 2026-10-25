@@ -1848,7 +1848,9 @@ function mdRowHtml(m, pr) {
     const bad = m.busy === 'congested' || m.busy === 'unavailable';
     caps.push('<span class="tag ' + (bad ? 'bad' : 'warn') + '" title="上游繁忙度 ' + esc(m.busy) + '（/v2/chat/busy 实时；服务端偶发无数据，同一批重查可能变）">' + BUSY_WORDS[m.busy] + '</span>');
   }
-  const capHtml = caps.length ? '<div class="id" style="margin-top:2px">' + caps.join(' ') + '</div>' : '';
+  // 能力徽标单独一行。这里原来复用 .id（UID 那行：小字、nowrap、overflow:hidden），
+  // 行高只有 17px，而胶囊是 22px —— 胶囊溢出到下一行，把下面模型的字压住。
+  const capHtml = caps.length ? '<div class="md-caps">' + caps.join('') + '</div>' : '';
   const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
   return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
     '<td class="num">' + rateCell(m) + '</td>' +
