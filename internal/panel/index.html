@@ -1012,10 +1012,8 @@ body {
 #accTable th:nth-child(4), #accTable td:nth-child(4) { width: 208px; max-width: 208px; }
 /* 窄桌面放不下十列时，先收起两列次要信息（在途 / 最近成功），保证操作按钮不被
    卡片边缘切掉；手机端是卡片布局，不受这条影响。 */
-@media (min-width: 761px) and (max-width: 1400px) {
-  #accTable th:nth-child(7), #accTable td:nth-child(7),
-  #accTable th:nth-child(9), #accTable td:nth-child(9) { display: none; }
-}
+/* 账号表十列全部保留：窄窗口宁可横向滚动，也不再隐藏「在途 / 最近成功」
+   （隐藏过一次，找列的人比滚动的人多）。 */
 /* 原因行占了一列宽，积分/用量两列相应收一档，1280 宽时整张表仍能塞进卡片。 */
 #accTable th:nth-child(5), #accTable td:nth-child(5) { min-width: 116px; }
 #accTable .usage-cell { min-width: 158px; }
