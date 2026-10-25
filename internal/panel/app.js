@@ -16,6 +16,7 @@ let activePool = null, poolGroups = [], activePoolReady = false;
 const probeBusy = Object.create(null), probeResult = Object.create(null);
 /* 浮窗里要展示的账号顺序（本轮测试）——结果不再插进表格行，改在右下角汇总。 */
 const probeFloatUids = [];
+let probeFloatSkipped = 0; // 本轮被跳过的号（没有 uid / 行内正在测），只在浮窗里报一句
 /* 账号池多选：按 uid 存集合而不是读 DOM。账号表每 5s 由轮询重建 tbody，
    勾选状态必须活在 DOM 之外才能在重绘后按住 uid 恢复；切换分组筛选 / 切换调用池
    时清空，避免把上一个范围里的号一起批量改。 */
@@ -512,7 +513,7 @@ function renderAccounts(list, filtered, probe) {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
-    let cls = '', tag;
+    let cls = '', tag, tagUsable = false;
     if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
     // 暂停选号：与禁用同属「不可选」，但照常保号（吸收上游 fd835df）
     else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停选号</span>'; }
@@ -526,7 +527,7 @@ function renderAccounts(list, filtered, probe) {
     // 会话疑似失效（12153 连续计数已 >0、还没到禁用阈值）：上游已判死、号还留在池里。
     // 此前这种中间态完全不可见，面板照样打「可用」（issue #215 复盘）。
     else if (s.session_dead_fails > 0) { cls = 'cool'; tag = '<span class="tag warn">疑似登录失效 · 待重登</span>'; }
-    else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
+    else { tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : ''); tagUsable = true; }
     // 状态列只留一个状态标签：详细原因（时间/处置建议/上游原文）放进 title，
     // 悬停可看，平时不占行高——之前多行详情把这一列撑得很乱（尤其窄屏）。
     if (s.reason) {
@@ -534,10 +535,11 @@ function renderAccounts(list, filtered, probe) {
       const tip = (when ? when + ' · ' : '') + s.reason;
       tag = tag.replace('<span class="tag', '<span title="' + esc(tip) + '" class="tag');
     }
-    // 测试结论优先于池状态：测出来不可用的号不再显示「可用」，否则与浮窗里的红色
-    // 结论自相矛盾。原因只进 title，行内不换行；页面刷新后回到服务端口径。
+    // 测试结论优先于池状态：只有「池里写着可用」的号才被测试结论改写成不可用，
+    // 否则就自相矛盾。禁用/冷却/登录失效这些标签本身就是「不可用」，保留原标签
+    // （测试细节在浮窗里），不然会把更有用的原因覆盖掉。
     const pr = prs[s.uid] || null;
-    if (pr && pr.ok === false) {
+    if (pr && pr.ok === false && tagUsable) {
       const why = pr.error ? String(pr.error) : '测试失败（无错误信息）';
       tag = '<span class="tag bad" title="' + esc('可用性测试：' + why) + '">测试不可用</span>';
     }
@@ -805,6 +807,7 @@ async function runProbeChat(uid) {
     delete probeBusy[uid];
     // 单个测试：浮窗只显示这一个号（批量测试会自己占满列表）。
     probeFloatUids.length = 0;
+    probeFloatSkipped = 0;
     probeFloatUids.push(uid);
     renderProbeFloat();
     paintAccounts();
@@ -815,35 +818,55 @@ async function runProbeChat(uid) {
 }
 
 /* ── 测试结果浮窗 ────────────────────────────────────────────────
-   结果不再插进表格行：右下角浮窗按本轮测试顺序汇总，超高自己滚，点关闭才收起。
-   行内状态标签同时变成「测试不可用」（见 renderAccounts），顶部「可用」计数也扣掉，
-   三处口径一致。 */
-function closeProbeFloat() {
-  probeFloatUids.length = 0;
-  renderProbeFloat();
+   结果不再插进表格行：右下角小窗按本轮顺序汇总。结果落地后自己消失（不提供关闭
+   按钮），鼠标停上去就暂停计时，移开后再给 2 秒。行内状态标签同时变成「测试
+   不可用」（见 renderAccounts），顶部「可用」计数也扣掉，三处口径一致。 */
+const PROBE_FLOAT_LINGER = 6000;   // 结果出来后停留多久自动收起
+const PROBE_FLOAT_AFTER_HOVER = 2000; // 鼠标移开后再留多久
+
+let probeFloatTimer = null;
+function clearProbeFloatTimer() {
+  if (probeFloatTimer) { clearTimeout(probeFloatTimer); probeFloatTimer = null; }
+}
+// 还有账号在测就不收；否则按 ms 后收起。悬停期间由 mouseenter 清掉计时器。
+function scheduleProbeFloatHide(ms) {
+  clearProbeFloatTimer();
+  if (probeFloatUids.some(uid => probeBusy[uid])) return;
+  probeFloatTimer = setTimeout(() => {
+    probeFloatUids.length = 0;
+    renderProbeFloat();
+  }, ms);
 }
 
 function renderProbeFloat() {
   const box = $('probeFloat');
   if (!box) return;
-  if (!probeFloatUids.length) { box.hidden = true; box.innerHTML = ''; return; }
+  if (!probeFloatUids.length) { clearProbeFloatTimer(); box.hidden = true; box.innerHTML = ''; return; }
   const all = (overviewData && overviewData.accounts) || [];
   const byUid = new Map(all.map(a => [a.uid, a]));
-  let ok = 0, bad = 0, running = 0;
+  let ok = 0, lifted = 0, bad = 0, unknown = 0, running = 0;
   const rows = probeFloatUids.map(uid => {
     const acc = byUid.get(uid) || { uid: uid };
     const res = probeResult[uid];
     const busy = !!probeBusy[uid];
     if (busy) running++;
-    else if (res && res.ok) ok++;
-    else if (res) bad++;
+    else if (res && res.ok === true) { if (res.verdict === 'lifted') lifted++; else ok++; }
+    else if (res && res.ok === false) bad++;
+    else if (res) unknown++;
     const name = acc.note || acc.nickname || String(uid).slice(0, 10);
     let verdict = '<span class="tag">—</span>', body = '';
     if (busy) verdict = '<span class="tag">测试中…</span>';
-    else if (res && res.ok) {
-      const lat = formatLatency(res.latency_ms);
-      verdict = '<span class="tag ok">可用</span>' + (lat === '—' ? '' : '<span class="pf-meta">' + esc(lat) + '</span>');
+    else if (res && res.ok === true) {
+      // 封禁探测的 lifted 不是「测通了」，是「上游已解封」，tag 文案要分开。
+      const lifted = res.verdict === 'lifted';
+      const lat = lifted ? '—' : formatLatency(res.latency_ms);
+      verdict = '<span class="tag ok">' + (lifted ? '已解封' : '可用') + '</span>' +
+        (lat === '—' ? '' : '<span class="pf-meta">' + esc(lat) + '</span>');
       if (res.reply) body = '<div class="pf-reply">' + esc(res.reply) + '</div>';
+      else if (lifted) body = '<div class="pf-reply">' + esc(res.note || '上游已解封，可以点「解冻」恢复使用') + '</div>';
+    } else if (res && res.ok === null) {
+      verdict = '<span class="tag">无法判断</span>';
+      body = '<div class="pf-err">' + esc(res.error || '探测无明确结论（网络/限流等），稍后再试') + '</div>';
     } else if (res) {
       verdict = '<span class="tag bad">不可用</span>';
       body = '<div class="pf-err">' + esc(res.error || '测试失败（无错误信息）') + '</div>';
@@ -853,14 +876,16 @@ function renderProbeFloat() {
       (res && res.model ? '<span class="pf-meta">' + esc(res.model) + '</span>' : '') +
       verdict + '</div>' + body + '</div>';
   }).join('');
-  const sub = [ok ? ok + ' 可用' : '', bad ? bad + ' 不可用' : '', running ? running + ' 进行中' : '']
+  const sub = [ok ? ok + ' 可用' : '', lifted ? lifted + ' 已解封' : '', bad ? bad + ' 不可用' : '', unknown ? unknown + ' 待确认' : '', running ? running + ' 进行中' : '', probeFloatSkipped ? probeFloatSkipped + ' 跳过' : '']
     .filter(Boolean).join(' · ') || '等待结果';
-  box.innerHTML = '<div class="pf-head"><b>可用性测试</b><span class="pf-sub">' + esc(sub) + '</span>' +
-    '<button class="xs ghost pf-close" type="button">关闭</button></div>' +
+  box.innerHTML = '<div class="pf-head"><b>可用性测试</b><span class="pf-sub">' + esc(sub) + '</span></div>' +
     '<div class="pf-body">' + rows + '</div>';
   box.hidden = false;
-  const btn = box.querySelector('.pf-close');
-  if (btn) btn.onclick = closeProbeFloat;
+  // 悬停暂停：鼠标在窗内就一直留着，移开后再给 2 秒。
+  box.onmouseenter = clearProbeFloatTimer;
+  box.onmouseleave = () => scheduleProbeFloatHide(PROBE_FLOAT_AFTER_HOVER);
+  if (running) clearProbeFloatTimer();
+  else scheduleProbeFloatHide(PROBE_FLOAT_LINGER);
 }
 
 // accFrozen 判断「这号是不是被封禁/冷却」——与 renderAccounts 里 frozen 同口径，
@@ -886,6 +911,30 @@ const PROBE_BAN_TEXT = {
   unknown: '无法探测：上游客户端未配置',
 };
 
+// runProbeBan 封禁/冷却号的只读解封探测（不 revive、不改池状态）。结论写进
+// probeResult，浮窗与行内状态共用：
+//   lifted                → 上游已解封（ok:true，这是好消息，不能算「不可用」）
+//   inconclusive/unknown  → 没有判词（ok:null），不硬判死
+//   其余（仍封 / 被拦 / 登录失效）→ ok:false
+async function runProbeBan(uid) {
+  try {
+    const r = await api('accounts/' + encodeURIComponent(uid) + '/probe_ban', { method: 'POST' });
+    const verdict = String((r && r.verdict) || '');
+    const text = PROBE_BAN_TEXT[verdict]
+      || (verdict ? verdict + (r && r.detail ? '：' + r.detail : '') : '无结论');
+    const ok = verdict === 'lifted' ? true
+      : (verdict === 'inconclusive' || verdict === 'unknown' ? null : false);
+    probeResult[uid] = {
+      ok: ok, verdict: verdict, uid: uid,
+      note: ok === true ? text : '',
+      error: ok === true ? '' : '封禁探测：' + text,
+    };
+  } catch (e) {
+    probeResult[uid] = { ok: false, error: '封禁探测失败：' + e.message };
+  }
+  return probeResult[uid];
+}
+
 async function runProbeAll() {
   if (probeAllRunning) return; // 已在跑：重复点击无副作用
   const all = (overviewData && overviewData.accounts) || [];
@@ -900,6 +949,7 @@ async function runProbeAll() {
   const total = list.length;
   // 浮窗先按本轮顺序铺好待测名单，逐个出结果时原地更新（不重新排序，不跳动）。
   probeFloatUids.length = 0;
+  probeFloatSkipped = 0;
   list.forEach(a => { if (a && a.uid && probeFloatUids.indexOf(a.uid) < 0) probeFloatUids.push(a.uid); });
   renderProbeFloat();
   let done = 0, ok = 0, bad = 0, skipped = 0;
@@ -918,13 +968,12 @@ async function runProbeAll() {
     paintAccounts();
     try {
       if (accFrozen(acc)) {
-        // 封禁/冷却号：只读探测，不 revive、不改池状态；结论直接当结果行展示。
-        const r = await api('accounts/' + encodeURIComponent(uid) + '/probe_ban', { method: 'POST' });
-        const verdict = String((r && r.verdict) || '');
-        const text = PROBE_BAN_TEXT[verdict]
-          || (verdict ? verdict + (r && r.detail ? '：' + r.detail : '') : '无结论');
-        probeResult[uid] = { ok: false, error: '封禁探测：' + text };
-        bad++;
+        // 封禁/冷却号：只读探测，不 revive、不改池状态；结论直接当结果展示。
+        // lifted 算可用、inconclusive 算待确认 —— 别把「已解封」记成失败。
+        await runProbeBan(uid);
+        const v = probeResult[uid].ok;
+        if (v === true) ok++;
+        else if (v === false) bad++;
       } else {
         const r = await api('accounts/' + encodeURIComponent(uid) + '/probe_chat', {
           method: 'POST',
@@ -958,11 +1007,11 @@ async function runProbeAll() {
   } finally {
     probeAllRunning = false;
     if (btn) { btn.disabled = false; btn.textContent = '全部测试'; }
+    probeFloatSkipped = skipped;
     renderProbeFloat();
     paintAccounts();
     loadOverview(true); // 同上：批量结束后立刻把「可用」对齐测试结论
   }
-  toast('全部测试完成：可用 ' + ok + ' / 不可用 ' + bad + ' / 跳过 ' + skipped, bad ? 'warn' : 'ok');
 }
 if ($('btnProbeAll')) $('btnProbeAll').onclick = runProbeAll;
 
@@ -1201,17 +1250,14 @@ $('accBody').addEventListener('click', async ev => {
       const acc = acctStateOf(u) || {};
       const frozenNow = !!acc.disabled || !!acc.cooling || (acc.cool_remaining_sec || 0) > 0;
       if (frozenNow) {
-        const r = await api('accounts/' + encodeURIComponent(u) + '/probe_ban', { method: 'POST' });
-        const map = {
-          lifted: ['已解封，可以点「解冻」恢复使用', 'ok'],
-          still_banned: ['仍被封禁，继续等待（勿反复 revive，可能加重风控）', 'warn'],
-          blocked: ['会话仍有效，但被上游风控拦截（可能仍是封禁）—— 继续观察', 'warn'],
-          session_dead: ['不是封禁问题 —— 登录态失效，需重新登录', 'warn'],
-          inconclusive: ['探测无明确结论（网络/限流等），稍后再试', 'warn'],
-          unknown: ['无法探测：上游客户端未配置', 'err'],
-        };
-        const m = map[r.verdict] || [r.verdict + (r.detail ? '：' + r.detail : ''), 'warn'];
-        toast(m[0], m[1]);
+        // 只读解封探测：结论进浮窗（lifted 显示「已解封」，不是「不可用」）。
+        await runProbeBan(u);
+        probeFloatUids.length = 0;
+        probeFloatSkipped = 0;
+        probeFloatUids.push(u);
+        renderProbeFloat();
+        paintAccounts();
+        loadOverview(true);
         return;
       }
       await runProbeChat(u);

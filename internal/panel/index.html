@@ -368,35 +368,34 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 /* 移动分组弹框：候选组做成一行行可点的胶囊，避免再手打组名 */
 .grp-picks { display: flex; flex-wrap: wrap; gap: 8px; }
 .grp-pick { padding: 4px 12px; border-radius: 999px; }
-/* 测试结果浮窗：固定在右下角，不再往表格里插整行（多行错误会把行高撑开、
-   把后面的行整体推开）。条目超出高度自己滚，点右上角关闭才收起。 */
+/* 测试结果浮窗：固定在右下角，不占表格行高。体积按「扫一眼」设计——结果出来
+   几秒后自己消失，鼠标停上去就不走（移开再计时），不需要手动关。 */
 #probeFloat {
-  position: fixed; right: 20px; bottom: 84px; z-index: 92;
-  width: min(400px, calc(100vw - 32px)); max-height: min(56vh, 480px);
+  position: fixed; right: 16px; bottom: 16px; z-index: 92;
+  width: min(300px, calc(100vw - 24px)); max-height: min(34vh, 320px);
   display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius-lg); box-shadow: var(--shadow-2);
+  border-radius: 12px; box-shadow: var(--shadow-2);
   animation: pfIn .16s ease-out;
 }
 @keyframes pfIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.pf-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--line-soft); }
-.pf-head b { font-size: 12.5px; font-weight: 620; }
-.pf-head .pf-sub { font-size: 11.5px; color: var(--ink-3); }
-.pf-close { margin-left: auto; flex: none; }
-.pf-body { overflow: auto; padding: 4px 6px 8px; }
-.pf-item { padding: 8px 8px 9px; border-bottom: 1px dashed var(--line-soft); font-size: 12px; }
+.pf-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
+.pf-head b { font-size: 12px; font-weight: 620; }
+.pf-head .pf-sub { font-size: 11px; color: var(--ink-3); margin-left: auto; }
+.pf-body { overflow: auto; padding: 2px 4px 6px; }
+.pf-item { padding: 6px 8px 7px; border-bottom: 1px dashed var(--line-soft); font-size: 11.5px; }
 .pf-item:last-child { border-bottom: none; }
-.pf-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pf-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pf-who { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.pf-meta { margin-left: 6px; color: var(--ink-3); font: 11px var(--mono); font-weight: 400; }
+.pf-meta { margin-left: 4px; color: var(--ink-3); font: 10.5px var(--mono); font-weight: 400; }
 .pf-err, .pf-reply {
-  margin-top: 4px; word-break: break-word;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  margin-top: 3px; word-break: break-word; font-size: 11px;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
 .pf-err { color: var(--bad); }
 .pf-reply { color: var(--ink-2); }
 @media (max-width: 760px) {
-  #probeFloat { left: 12px; right: 12px; bottom: 74px; width: auto; max-height: 46vh; }
+  #probeFloat { left: 12px; right: 12px; bottom: 70px; width: auto; max-height: 40vh; }
 }
 
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
@@ -499,7 +498,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .vc.expired .hd, .vc.expired .meta { opacity: .55; }
 
 /* ── Toast ───────────────────────────────────────────────────────── */
-#toasts { position: fixed; right: 20px; bottom: 20px; z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+#toasts { position: fixed; right: 20px; bottom: 20px; z-index: 96; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .tst {
   background: var(--raise); border: 1px solid var(--line); border-left: 3px solid var(--ink-3);
   border-radius: 8px; padding: 10px 15px; font-size: 13px; box-shadow: var(--shadow); max-width: 380px;
@@ -891,11 +890,14 @@ body {
 .stat, .stats .st { min-width: 0; }
 .stat .v, .stats .st .v {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 5px; min-width: 0;
-  font-size: clamp(19px, 1.35vw, 23px); font-weight: 650; letter-spacing: -.02em;
+  font-size: clamp(18px, 1.35vw, 22px); font-weight: 650; letter-spacing: -.02em;
 }
 .stat .v .of, .stats .st .v .of {
-  font-size: .66em; font-weight: 600; color: var(--ink-3); letter-spacing: -.01em;
+  font-size: inherit; font-weight: inherit; color: inherit; letter-spacing: inherit;
 }
+/* 积分是「剩余 / 总额」两个数拼起来的，比单个数字长：两段同色同号，放不下时
+   在斜杠前折行（flex-wrap），字号与其它卡片保持一致。 */
+
 .stat .k, .stats .st .k { font-size: 11.5px; margin-top: 6px; color: var(--ink-3); }
 
 /* ── 面板块：更软的圆角与头部层次 ───────────────────────────────── */
