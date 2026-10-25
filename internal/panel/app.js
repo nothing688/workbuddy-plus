@@ -946,6 +946,7 @@ const PROBE_BAN_TEXT = {
   lifted: '已解封，可以点「解冻」恢复使用',
   still_banned: '仍被封禁，继续等待（勿反复 revive，可能加重风控）',
   blocked: '会话仍有效，但被上游风控拦截（可能仍是封禁）—— 继续观察',
+  channel_blocked: '请求被渠道校验拦下（11-128），不是账号封禁 —— 换官方客户端或重发试试',
   session_dead: '不是封禁问题 —— 登录态失效，需重新登录',
   inconclusive: '探测无明确结论（网络/限流等），稍后再试',
   unknown: '无法探测：上游客户端未配置',

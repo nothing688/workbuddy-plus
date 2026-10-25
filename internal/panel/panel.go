@@ -11,6 +11,7 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -1349,15 +1350,17 @@ func (p *Panel) modelFallbackSnapshot() map[string]string {
 // 是反复 revive —— 但每次 revive 都会让账号重新参与选号、立刻再撞 11140，
 // 反复触发可能加重上游风控判定。需要一个「不惊动它」的问法。
 //
-// 用什么探：UserResource（余额查询）是最轻的只读端点，且 11140 会在这里原样返回
-// （上游 auth/auth_forbidden 在 billing 侧同样生效）。不用 chat —— 那会占在途、
-// 记连败、可能被计入风控。
+// 用什么探：**对话接口**（与 probe_chat 同形，max_tokens 16）。之前用 UserResource
+// （余额查询）当代理，理由是更轻、不惊动风控；2026-10-25 实测证伪：账号在对话接口
+// 仍返回 11140 时，余额接口照样 200 —— 面板于是报「已解封」，点开对话立刻 403。
+// 11140 是对话链路的鉴权，余额链路根本不校验它，只有对话能问出真话。
 //
-// 判据：
-//   - 200            → 已解封（可以 revive 了）
-//   - 11140/封禁类   → 仍被封（继续等）
-//   - 401/session    → 不是封禁问题，是登录失效（该重登）
-//   - 其它           → 无结论（网络/限流等，稍后再试）
+// 判据（对话接口）：
+//   - 成功            → 已解封（可以 revive 了）
+//   - 11140/封禁类    → 仍被封（继续等）
+//   - 11-128 渠道校验 → 不是账号封禁，是请求被渠道校验拦下
+//   - 401/12153       → 不是封禁问题，是登录失效（该重登）
+//   - 其它            → 无结论（网络/限流等，稍后再试）
 //
 // 不写任何池状态：探测是观测行为，不该改变账号的可用性判断 —— 否则运维点一下
 // 探活就把号放回池子，等于变相 revive。
@@ -1387,7 +1390,36 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	_, _, err := p.cfg.Upstream.UserResource(a)
+	// 对话路径才是 11140 的判词来源（见函数注释）。请求体与 probe_chat 同形，
+	// 这里只关心成功/错误，不解析回包正文。
+	bare := p.probeDefaultModel(a)
+	probeBody, berr := json.Marshal(map[string]any{
+		"model":      bare,
+		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
+		"max_tokens": 16,
+		"stream":     false,
+	})
+	if berr != nil {
+		resp["verdict"] = "inconclusive"
+		resp["detail"] = berr.Error()
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), probeChatTimeout)
+	defer cancel()
+	rc, status, respBody, callErr := p.cfg.Upstream.ChatStreamContext(ctx, a, probeBody, "", upstream.ChatMeta{}, nil)
+	if rc != nil {
+		rc.Close()
+	}
+	var err error
+	switch {
+	case callErr != nil:
+		err = callErr
+	case status >= 400:
+		// 少数非 2xx 不返回 error（只在流内报错）：按同一套分类补一个等价错误，
+		// 让下面的判据只有一处。
+		err = &upstream.Error{Kind: upstream.Classify(status, string(respBody)), Status: status, Msg: string(respBody)}
+	}
 	// 302/401 的求证与 chat 路径同一套逻辑（见 server/handler.go 的网关 401 分支）：
 	// 网关 401 的响应体是 APISIX 的 HTML 页，**封禁（11140）与登录失效看起来完全一样**，
 	// 单看 401 分不出来。refresh 才是权威判词：refresh 成功 = 会话仍活（那 401 就是
@@ -1418,6 +1450,12 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 		resp["verdict"] = "lifted"
 		resp["advice"] = "上游已解封，可以点「解冻」恢复使用"
 		log.Printf("panel: probe_ban uid=%s → 已解封", uid)
+	case isAccountFaultErr(err) && upstream.HasCodeMarker(err.Error(), "11-128"):
+		// 渠道校验拦截：请求本身被判非法（常见于非官方客户端），与账号封禁无关。
+		resp["verdict"] = "channel_blocked"
+		resp["detail"] = err.Error()
+		resp["advice"] = "请求被渠道校验拦下（11-128），不是账号封禁；换官方客户端或重发试试"
+		log.Printf("panel: probe_ban uid=%s → 11-128 渠道校验拦截", uid)
 	case isAccountFaultErr(err):
 		resp["verdict"] = "still_banned"
 		resp["detail"] = err.Error()

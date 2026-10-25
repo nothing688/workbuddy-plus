@@ -634,3 +634,75 @@ func TestAccountProbeChatRateLimitKeepsPool(t *testing.T) {
 		t.Fatalf("429 不该禁用账号: %+v", st)
 	}
 }
+
+// TestAccountProbeBanChatIsAuthoritative 封禁探测必须看对话接口：余额接口对 11140
+// 是免疫的（2026-10-25 实测：对话 403 11140 时 UserResource 仍 200），按余额判会
+// 得出「已解封」的假结论。
+func TestAccountProbeBanChatIsAuthoritative(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				return probeJSONResponse(403, `{"code":11140,"msg":"request illegal","zh":"账号存在异常行为，已暂停"}`), nil
+			}
+			return probeJSONResponse(200, `{"data":{"ok":true}}`), nil // 余额接口照常 200
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pl.Disable("u1", "11140 账号存在异常行为，已暂停")
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_ban", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Verdict string `json:"verdict"`
+		Advice  string `json:"advice"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Verdict != "still_banned" {
+		t.Fatalf("verdict=%q, want still_banned（对话仍 11140，余额 200 不能当解封）", resp.Verdict)
+	}
+	if st, _ := pl.Status("u1"); !st.Disabled {
+		t.Fatalf("探测不该改池状态: %+v", st)
+	}
+}
+
+// TestAccountProbeBanLiftedWhenChatWorks 对话真的通了才算已解封；且只报结论，
+// 不自动 revive（解冻仍由人工确认）。
+func TestAccountProbeBanLiftedWhenChatWorks(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				return probeSSEResponse(
+					"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pong\"}}]}\n\n" +
+						"data: [DONE]\n\n"), nil
+			}
+			return probeJSONResponse(500, `{"code":500,"msg":"no models"}`), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pl.Disable("u1", "11140 账号存在异常行为，已暂停")
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_ban", "")
+	var resp struct {
+		Verdict string `json:"verdict"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Verdict != "lifted" {
+		t.Fatalf("verdict=%q, want lifted; body=%s", resp.Verdict, rec.Body.String())
+	}
+	st, _ := pl.Status("u1")
+	if !st.Disabled {
+		t.Fatal("probe_ban 只报结论，不该自动解冻")
+	}
+}
