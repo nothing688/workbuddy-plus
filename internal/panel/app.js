@@ -1,9 +1,6 @@
 'use strict';
 /* ── 状态 ─────────────────────────────────────────────────────────── */
 const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
-/* 账号备注的本机键（模块级声明放顶部，避开 TDZ）。 */
-const LS_REMARKS = 'wb2api.remarks.v1';
-let remarksCache = null;
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
@@ -17,6 +14,8 @@ let groupsData = [], accGroupFilter = null, metaUID = null;
    轮询更新徽章但绝不动用户手动选的筛选。 */
 let activePool = null, poolGroups = [], activePoolReady = false;
 const probeBusy = Object.create(null), probeResult = Object.create(null);
+/* 「全部测试」运行中标记：模块级，切页 / 5s 轮询都不会清它；重复点击靠它兜住。 */
+let probeAllRunning = false;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 上游同步：轮询定时器（只用 setTimeout 递归，避免 setInterval 泄漏）。 */
@@ -554,8 +553,8 @@ function renderAccounts(list, filtered, probe) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     // 分组徽章（后端 meta，全端共享）：点一下开编辑弹框。
     // 名称备注同样来自后端 meta（全端共享）：有服务端备注 → 备注名 + 原昵称浅灰跟随；
-    // 没有备注 → 只显示原昵称。账号池不再用本机 localStorage 备注（remarkName）
-    // 覆盖名称——那会让同一账号在不同设备上名字不一致；用量明细等视图保持原样。
+    // 没有备注 → 只显示原昵称。这是唯一的备注入口（点账号名即编辑），本机
+    // localStorage 备注已移除——同一账号在不同设备上名字必须一致。
     const grp = String(s.group == null ? '' : s.group);
     const noteText = String(s.note == null ? '' : s.note);
     const grpCell = '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
@@ -763,6 +762,102 @@ async function runProbeChat(uid) {
     paintAccounts();
   }
 }
+
+// accFrozen 判断「这号是不是被封禁/冷却」——与 renderAccounts 里 frozen 同口径，
+// 决定「全部测试」该走只读 probe_ban 还是真实对话 probe_chat。
+function accFrozen(s) {
+  const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
+  const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
+  const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
+  return !!(s.disabled || s.cooling || cool > 0);
+}
+
+// runProbeAll「全部测试」：对**当前筛选范围**内的账号逐个探测，并发上限 2（正常号要真
+// 打一次上游对话，并发再高容易自己触发风控/限流）。结果写进同一个 probeResult，
+// 行内「测试」按钮与批量共用一套展示；每完成一个就 paintAccounts()，结果逐行出现。
+// probeAllRunning 是模块级标记：运行中重复点击直接返回，期间切页/5s 轮询只重建 tbody，
+// 既不会中断批量，也不会清掉已有结果（probeResult 存在 DOM 之外）。
+const PROBE_BAN_TEXT = {
+  lifted: '已解封，可以点「解冻」恢复使用',
+  still_banned: '仍被封禁，继续等待（勿反复 revive，可能加重风控）',
+  blocked: '会话仍有效，但被上游风控拦截（可能仍是封禁）—— 继续观察',
+  session_dead: '不是封禁问题 —— 登录态失效，需重新登录',
+  inconclusive: '探测无明确结论（网络/限流等），稍后再试',
+  unknown: '无法探测：上游客户端未配置',
+};
+
+async function runProbeAll() {
+  if (probeAllRunning) return; // 已在跑：重复点击无副作用
+  const all = (overviewData && overviewData.accounts) || [];
+  const list = accGroupFilter == null ? all
+    : all.filter(a => a && String(a.group == null ? '' : a.group) === accGroupFilter);
+  if (!list.length) { toast('当前筛选范围内没有账号', 'warn'); return; }
+  if (!confirm('将对当前筛选范围内的 ' + list.length + ' 个账号逐个测试。\n' +
+    '正常账号会发一次真实对话（消耗额度），封禁/冷却账号只做只读解封探测。\n确认开始？')) return;
+
+  probeAllRunning = true;
+  const btn = $('btnProbeAll');
+  const total = list.length;
+  let done = 0, ok = 0, bad = 0, skipped = 0;
+  const progress = () => { if (btn) btn.textContent = '测试中 ' + done + '/' + total; };
+  if (btn) { btn.disabled = true; progress(); }
+
+  // 单个账号的探测：把结论写进 probeResult 后返回，异常也落成「不可用」，
+  // 保证 900 行的批量不会因为一个号超时/404 就整体卡住。
+  const probeOne = async acc => {
+    const uid = acc.uid;
+    // 没有 uid / 行内的单个测试正在测这个号：跳过，但照样计入进度，
+    // 否则「测试中 x/y」永远到不了 y，用户会以为卡住了。
+    if (!uid || probeBusy[uid]) { skipped++; done++; progress(); return; }
+    probeBusy[uid] = true;
+    delete probeResult[uid];
+    paintAccounts();
+    try {
+      if (accFrozen(acc)) {
+        // 封禁/冷却号：只读探测，不 revive、不改池状态；结论直接当结果行展示。
+        const r = await api('accounts/' + encodeURIComponent(uid) + '/probe_ban', { method: 'POST' });
+        const verdict = String((r && r.verdict) || '');
+        const text = PROBE_BAN_TEXT[verdict]
+          || (verdict ? verdict + (r && r.detail ? '：' + r.detail : '') : '无结论');
+        probeResult[uid] = { ok: false, error: '封禁探测：' + text };
+        bad++;
+      } else {
+        const r = await api('accounts/' + encodeURIComponent(uid) + '/probe_chat', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        probeResult[uid] = Object.assign({ ok: false }, r || {});
+        if (probeResult[uid].ok) ok++; else bad++;
+      }
+    } catch (e) {
+      probeResult[uid] = { ok: false, error: e.message };
+      bad++;
+    } finally {
+      delete probeBusy[uid];
+      done++;
+      progress();
+      paintAccounts();
+    }
+  };
+
+  // 两个 worker 共用一个游标轮流取号：谁先返回谁继续，天然形成「上限 2、有人空就补位」。
+  let next = 0;
+  const worker = async () => {
+    while (next < list.length) {
+      const acc = list[next++];
+      await probeOne(acc);
+    }
+  };
+  try {
+    await Promise.all([worker(), worker()]);
+  } finally {
+    probeAllRunning = false;
+    if (btn) { btn.disabled = false; btn.textContent = '全部测试'; }
+    paintAccounts();
+  }
+  toast('全部测试完成：可用 ' + ok + ' / 不可用 ' + bad + ' / 跳过 ' + skipped, bad ? 'warn' : 'ok');
+}
+if ($('btnProbeAll')) $('btnProbeAll').onclick = runProbeAll;
 
 // openMeta 分组/备注小弹框。field 决定聚焦哪个输入（点分组徽章就落在分组上）。
 function openMeta(uid, field) {
@@ -2813,7 +2908,7 @@ function renderUsageDim() {
       x,
       isAcct ? '<td class="num">' + esc(x.realm || '') + '</td>' : '',
       m.withPerf,
-      isAcct ? remarkName(x.key, esc(key)) : '');
+      isAcct ? esc(key) : '');
   }).join('') || '<tr><td colspan="' + m.span + '" class="empty">暂无数据</td></tr>';
   $('usDimNote').textContent = rows.length + ' 行 · 请求数含失败尝试';
 }
@@ -2854,7 +2949,7 @@ function renderCreditDim() {
       const account = row.nickname || uid.slice(0, 8) || '—';
       return '<tr>' +
         '<td class="mark" aria-hidden="true"></td>' +
-        '<td>' + remarkName(uid, esc(account)) + '<div class="note">' + esc(row.realm || '') + ' · ' + esc(uid.slice(0, 8)) + '</div></td>' +
+        '<td>' + esc(account) + '<div class="note">' + esc(row.realm || '') + ' · ' + esc(uid.slice(0, 8)) + '</div></td>' +
         '<td class="num">' + fmtTok(row.requests) + '</td>' +
         '<td class="num">' + fmtCredit(row.credits) + '</td>' +
         '<td class="num">' + fmtTok(row.credit_tokens) + '</td>' +
@@ -4221,74 +4316,6 @@ async function loadPackages(force) {
 
 // 「刷新」始终实时查：必须显式 force —— 直接 `onclick = loadPackages` 会把事件对象当真值传进去，恒等于强刷。
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
-
-/* ══ 账号备注（只写本机 localStorage；账号池 / 用量两个视图共用同一份映射）══════
-   键取 uid 前 8 位——与 renderUsageDim 账号维度的 key 和积分扣除表的 uid 前缀同源，
-   三个表格因此都能直接 join。展示层只替换文本并挂 .rm-ghost 虚体，账号标识本身
-   仍由服务端下发，不写回后端；备注是纯展示层信息，不参与选号 / 计费 / 鉴权。 */
-function remarksAll() {
-  if (remarksCache) return remarksCache;
-  try { remarksCache = JSON.parse(localStorage.getItem(LS_REMARKS)) || {}; }
-  catch (e) { remarksCache = {}; }
-  return remarksCache;
-}
-function remarkKey(uid) { return String(uid == null ? '' : uid).slice(0, 8); }
-function remarkOf(uid) {
-  const k = remarkKey(uid);
-  return k ? String(remarksAll()[k] || '') : '';
-}
-/* nameHtml 必须是已转义的 HTML；有备注时返回「备注 + 原标识（浅色虚体）」 */
-function remarkName(uid, nameHtml) {
-  const r = remarkOf(uid);
-  return r ? esc(r) + '<span class="rm-ghost">' + nameHtml + '</span>' : nameHtml;
-}
-function storeRemarks(map) {
-  remarksCache = map;
-  try { localStorage.setItem(LS_REMARKS, JSON.stringify(map)); } catch (e) {}
-}
-
-/* 编辑器的行来自 overview 缓存（账号池加载过就有），另外补上「已有备注但当前列表里
-   没有」的键，避免账号被移除后备注看起来凭空消失。 */
-function remarkFormRows() {
-  const rows = ((overviewData && overviewData.accounts) || [])
-    .map(s => ({ uid: remarkKey(s.uid), who: s.nickname || remarkKey(s.uid) }))
-    .filter(r => r.uid);
-  for (const k of Object.keys(remarksAll())) {
-    if (!rows.some(r => r.uid === k)) rows.push({ uid: k, who: k });
-  }
-  return rows;
-}
-function renderRemarkBody() {
-  const box = $('remarkBody');
-  if (!box) return;
-  const rows = remarkFormRows();
-  box.innerHTML = rows.length
-    ? rows.map(r => '<div class="rm-row"><span class="rm-who" title="' + esc(r.who) + '">' + esc(r.who) + '</span>' +
-        '<input type="text" data-uid="' + esc(r.uid) + '" value="' + esc(remarksAll()[r.uid] || '') + '" placeholder="备注（留空即清除）" maxlength="24"></div>').join('')
-    : '<div class="empty">暂无账号：先在「账号池」加载一次账号列表。</div>';
-}
-function openRemarks() {
-  renderRemarkBody();
-  if ($('remarkVeil')) $('remarkVeil').classList.add('on');
-}
-function closeRemarks() { if ($('remarkVeil')) $('remarkVeil').classList.remove('on'); }
-function saveRemarkForm() {
-  const map = {};
-  document.querySelectorAll('#remarkBody input[data-uid]').forEach(inp => {
-    const v = inp.value.trim();
-    if (v) map[inp.getAttribute('data-uid')] = v;
-  });
-  storeRemarks(map);
-  closeRemarks();
-  // 备注只影响本机展示：重渲染当前视图即可，无需后端参与。
-  if (view === 'accounts') loadOverview(true);
-  else if (view === 'usage' && usageData) renderUsage(usageData);
-  toast('备注已保存（仅本机浏览器）');
-}
-if ($('btnRemarks')) $('btnRemarks').onclick = openRemarks;
-if ($('btnRemarkClose')) $('btnRemarkClose').onclick = closeRemarks;
-if ($('btnRemarkClear')) $('btnRemarkClear').onclick = () => { storeRemarks({}); renderRemarkBody(); };
-if ($('btnRemarkSave')) $('btnRemarkSave').onclick = saveRemarkForm;
 
 /* 账号身份色板（8 槽）。槽位 0 = var(--accent)（**主题主色**，浅色主题下
    自动跟随；刻意保留，因为它承载的是"第一条线=当前主题强调色"的既有语义，

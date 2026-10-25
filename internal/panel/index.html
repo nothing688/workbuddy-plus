@@ -714,15 +714,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
   /* 用量统计条已改用 .kpis（见「用量视图」段），此处不再保留 .stats.compact 变体。 */
 
-  /* ── 账号备注（本机 localStorage，不写服务器）─────────────────────
-     有备注时备注当主标识，原昵称 / uid8 以 .rm-ghost 浅色跟随。账号池、用量明细、
-     积分扣除三张表共用同一套渲染，保证同一账号在两个视图里显示一致。 */
+  /* 账号名称备注（服务端 meta，全端共享）：备注当主标识，原昵称以 .rm-ghost 浅色跟随。
+     备注入口只有一个——点账号名打开「账号名称与分组」弹框。 */
   .rm-ghost { color: var(--ink-3); font-weight: 400; margin-left: .35em; }
-  .rm-list { display: flex; flex-direction: column; gap: 9px; }
-  .rm-row { display: flex; align-items: center; gap: 10px; }
-  .rm-row .rm-who { flex: 0 0 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--ink-2); font-size: 12.5px; }
-  .rm-row input { flex: 1; }
 
 .acc td.fl { line-height: 1.35; }
 .acc td.fl .fl-row { display: block; font-variant-numeric: tabular-nums; }
@@ -848,7 +842,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <label class="sel-note" title="按分组筛选账号池；计数为该分组的账号数 / 可用数">分组
             <select id="accGroupFilter"><option value="__all__">全部分组</option></select>
           </label>
-          <button class="xs" id="btnRemarks">备注</button>
+          <button class="xs" id="btnProbeAll" title="逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测">全部测试</button>
           <button class="xs" id="btnCheckinAll">全部签到</button>
           <button class="xs" id="btnTravelAll">旅行巡检</button>
           <button class="xs" id="btnActivityAll">活跃上报</button>
@@ -1753,7 +1747,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       </div>
       <!-- 导入 JSON -->
       <div id="addTabImport" class="tab-panel" hidden>
-        <div class="hint" style="margin-bottom:8px">选择 cockpit tools 导出的 JSON 文件，批量导入账号。文件需为账号数组格式。</div>
+        <div class="hint" style="margin-bottom:8px">选择 JSON 文件批量导入账号。支持三种结构：账号数组、单个账号对象、<code>{"accounts":[...]}</code> 包裹；必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选。兼容常见别名字段（<code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等），过期时间戳秒或毫秒均可。</div>
         <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
         <input type="file" id="importFile" accept=".json" style="margin-bottom:8px">
         <div id="importDone" class="state ok" hidden></div>
@@ -1790,25 +1784,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 </div>
 
 <div id="toasts"></div>
-
-<!-- 账号备注：只写本机 localStorage，不写回服务器；账号池与用量两个视图同步显示 -->
-<div class="veil" id="remarkVeil">
-  <div class="dlg" style="width:560px">
-    <header>
-      <h3>账号备注</h3>
-      <div class="hint">备注只存在本机浏览器（localStorage: wb2api.remarks.v1），不写回后端；账号池与用量页会同时显示「备注 + 原昵称」。留空即清除该账号备注。</div>
-    </header>
-    <div class="body">
-      <div class="rm-list" id="remarkBody"></div>
-    </div>
-    <footer>
-      <button class="danger" id="btnRemarkClear">清空全部</button>
-      <span class="grow"></span>
-      <button id="btnRemarkClose">关闭</button>
-      <button class="primary" id="btnRemarkSave">保存</button>
-    </footer>
-  </div>
-</div>
 
 <!-- 账号名称备注与分组：写回后端（POST /accounts/{uid}/meta）。
      名称备注就是「账号备注」——显示在账号名前面替代原昵称，不单独占一列。 -->
