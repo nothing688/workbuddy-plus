@@ -2174,8 +2174,8 @@ function renderRequestTable() {
     return '<tr title="' + esc(requestLogText(e)) + '">' +
       '<td class="num">' + esc(when) + '</td>' +
       '<td>' + reqOutcomeTag(e) + '</td>' +
-      '<td>' + esc(e && e.model || '—') + '</td>' +
-      '<td>' + esc(e && e.account || '—') + '</td>' +
+      '<td title="' + esc(e && e.model || '') + '">' + esc(e && e.model || '—') + '</td>' +
+      '<td title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</td>' +
       '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
