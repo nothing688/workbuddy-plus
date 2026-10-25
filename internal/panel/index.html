@@ -24,13 +24,15 @@
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
   --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.5);
-  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "Cascadia Mono", ui-monospace, "SF Mono", Consolas, "Sarasa Mono SC", monospace;
+  /* 中文显式点名「微软雅黑 UI」：它的小字号 hinting 比旧版 Microsoft YaHei 稳，
+     12px 表格里笔画不会糊成一片；没装则依次回落苹方 / 雅黑 / 思源黑体。 */
+  --sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
 }
 [data-theme="light"] {
   --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
   --line: #e2e5ec; --line-soft: #eceef3;
-  --ink: #14171f; --ink-2: #545c6e; --ink-3: #8b93a5;
+  --ink: #232936; --ink-2: #545c6e; --ink-3: #8b93a5;
   --bh-1: #7d7900; --bh-2: #368700; --bh-3: #008a23; --bh-4: #00819e;
   --bh-5: #1600bf; --bh-6: #af00bf; --bh-7: #bf0036;
   --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
@@ -43,7 +45,7 @@
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
-  background: var(--bg); color: var(--ink); font: 14px/1.55 var(--sans);
+  background: var(--bg); color: var(--ink); font: 14.5px/1.62 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 ::selection { background: var(--accent-soft); }
