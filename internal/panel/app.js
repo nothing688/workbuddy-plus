@@ -1221,6 +1221,45 @@ if ($('btnSelMode')) $('btnSelMode').onclick = () => {
   paintAccounts();
 };
 
+/* ── 新建分组 ────────────────────────────────────────────────────── */
+function openNewGroupDialog() {
+  const inp = $('newGrpName');
+  if (!inp) return;
+  inp.value = '';
+  $('newGrpErr').hidden = true;
+  $('newGrpVeil').classList.add('on');
+  setTimeout(() => inp.focus(), 60);
+}
+if ($('btnNewGroup')) $('btnNewGroup').onclick = openNewGroupDialog;
+if ($('btnNewGrpCancel')) $('btnNewGrpCancel').onclick = () => $('newGrpVeil').classList.remove('on');
+async function saveNewGroup() {
+  const inp = $('newGrpName');
+  const name = ((inp && inp.value) || '').trim();
+  const err = $('newGrpErr');
+  if (!name) { err.textContent = '请输入分组名称'; err.hidden = false; return; }
+  const btn = $('btnNewGrpSave');
+  if (btn) btn.disabled = true;
+  try {
+    await api('groups', { method: 'POST', body: JSON.stringify({ name: name }) });
+    $('newGrpVeil').classList.remove('on');
+    toast('已创建分组 ' + name, 'ok');
+    await loadGroups();
+    // 切到新分组查看（空组会显示空态，说明创建成功）
+    accGroupFilter = name;
+    accSel.clear();
+    renderGroupSelect();
+    paintAccounts();
+    loadPoolActive();
+  } catch (e) {
+    err.textContent = e.message;
+    err.hidden = false;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+if ($('btnNewGrpSave')) $('btnNewGrpSave').onclick = saveNewGroup;
+if ($('newGrpName')) $('newGrpName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveNewGroup(); } });
+
 /* ── 导出账号 ──────────────────────────────────────────────────────
    与导入同构（account + auth + group/note），导出后可原样再导入。
    文件含 token 明文，下载前明确确认。 */

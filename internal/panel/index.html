@@ -1344,6 +1344,7 @@ input::placeholder { color: var(--ink-3); }
           <button class="xs primary" id="btnPoolActive" title="选好分组后点此切换为默认调用池（下拉本身只改查看范围）">切换</button>
           <button class="xs" id="btnSelMode" title="进入多选：勾选账号后可批量移动到分组；再次点击退出并清空选择">多选</button>
           <button class="xs" id="btnProbeAll" title="逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测">全部测试</button>
+          <button class="xs" id="btnNewGroup" title="新建一个分组（可先空着，之后把账号移进去）">新建分组</button>
           <span class="hint">不带分组参数的请求走当前调用池</span>
           <span class="grow"></span>
           <!-- 多选工具条：无勾选时整块 hidden；全选只作用于当前筛选范围 -->
@@ -2346,6 +2347,28 @@ input::placeholder { color: var(--ink-3); }
       <span class="grow"></span>
       <button id="btnGrpCancel">取消</button>
       <button class="primary" id="btnGrpSave">确定</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 新建分组：只创建分组名，账号通过「移动到分组」或导入时归入 -->
+<div class="veil" id="newGrpVeil">
+  <div class="dlg" style="width:400px">
+    <header>
+      <h3>新建分组</h3>
+      <div class="hint">空分组也会保留，之后可在账号行点分组徽章把账号移进去</div>
+    </header>
+    <div class="body">
+      <label class="fld"><span class="lb">分组名称</span>
+        <input id="newGrpName" placeholder="例如 teamA" autocomplete="off">
+        <span class="hint">同名分组已存在时不会重复创建。</span>
+      </label>
+      <div class="state err" id="newGrpErr" hidden></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnNewGrpCancel">取消</button>
+      <button class="primary" id="btnNewGrpSave">创建</button>
     </footer>
   </div>
 </div>

@@ -115,6 +115,14 @@ func (p *Pool) GroupCounts() []GroupInfo {
 			out[i].Healthy++
 		}
 	}
+	// 手工创建但还没有账号的分组：补 0/0 项，避免新组在刷新后消失。
+	for name := range p.extraGroups {
+		if _, ok := idx[name]; ok {
+			continue
+		}
+		idx[name] = len(out)
+		out = append(out, GroupInfo{Name: name})
+	}
 	sort.Slice(out, func(i, j int) bool {
 		// 未分组最后；其余按字典序（sort.Slice 不稳定，故比较器必须给全序）。
 		if (out[i].Name == "") != (out[j].Name == "") {
@@ -123,4 +131,24 @@ func (p *Pool) GroupCounts() []GroupInfo {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+
+// CreateGroup 手工创建一个分组（可暂无账号）。名字 trim 后为空返回 false；
+// 已存在（有账号或已声明）视为成功（幂等）。空分组随 state.json 持久化。
+func (p *Pool) CreateGroup(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.extraGroups == nil {
+		p.extraGroups = map[string]bool{}
+	}
+	if !p.extraGroups[name] {
+		p.extraGroups[name] = true
+		p.dirty.Store(true)
+	}
+	return true
 }

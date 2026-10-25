@@ -225,6 +225,7 @@ func (p *Panel) routes() {
 	// 批量移动分组：只改 group，逐个保留原 note；不存在的 UID 收进 missing（部分成功 200）。
 	p.mux.HandleFunc("POST /panel/api/accounts/meta_batch", p.withAuth(p.accountsMetaBatch))
 	p.mux.HandleFunc("GET /panel/api/groups", p.withAuth(p.groupsList))
+	p.mux.HandleFunc("POST /panel/api/groups", p.withAuth(p.groupsCreate))
 	// 默认调用池（不带分组参数的请求走哪个组）。GET 读当前值 + 分组计数，
 	// POST 切换（空串 = 全池）；写入落 pool 的 state.json，重启后保留。
 	p.mux.HandleFunc("GET /panel/api/pool/active", p.withAuth(p.poolActiveGet))

@@ -4,6 +4,7 @@ package pool
 
 import (
 	"encoding/json"
+	"sort"
 	"errors"
 	"io/fs"
 	"log"
@@ -146,6 +147,12 @@ func (p *Pool) load() {
 	p.applyAccountsLocked(sf.Accounts)
 	// 默认调用池随 state.json 恢复（空串 = 全池，旧文件缺该字段即零值）。
 	p.activeGroup = strings.TrimSpace(sf.ActiveGroup)
+	p.extraGroups = make(map[string]bool, len(sf.Groups))
+	for _, g := range sf.Groups {
+		if g = strings.TrimSpace(g); g != "" {
+			p.extraGroups[g] = true
+		}
+	}
 }
 
 // applyAccountsLocked 用持久化账号状态覆盖/插入 byUID（placeholder 凭证，Add 时换全）。
@@ -341,7 +348,12 @@ func (p *Pool) notePersistFail(err error) {
 // stateOverviewLocked 收集当前内存状态为 stateFile（供落盘 + 快照镜像复用）。调用方必须已持 p.mu。
 func (p *Pool) stateOverviewLocked() stateFile {
 	now := time.Now()
-	sf := stateFile{Accounts: map[string]stateAccount{}, ActiveGroup: p.activeGroup}
+	var declared []string
+	for name := range p.extraGroups {
+		declared = append(declared, name)
+	}
+	sort.Strings(declared)
+	sf := stateFile{Accounts: map[string]stateAccount{}, ActiveGroup: p.activeGroup, Groups: declared}
 	for uid, e := range p.byUID {
 		s := stateAccount{
 			Credits:                  e.credits,

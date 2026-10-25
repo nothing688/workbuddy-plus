@@ -21,6 +21,8 @@ type Pool struct {
 	// 空串 = 全池（引入前行为）。持久化在 state.json 的 active_group（含 Redis 快照）。
 	// 只经 SetActiveGroup/ActiveGroup 读写，二者自行加锁。
 	activeGroup string
+	// extraGroups 手工创建的空分组（无账号成员），随 state.json 持久化。
+	extraGroups map[string]bool
 	// store 池状态快照镜像（redisstore.Store）；nil = 无需镜像（未配置 Redis / Noop 之外也可能 nil）。
 	// SaveState/LoadState 经它接线，与本地 state.json 并存作启动恢复备份。
 	store StoreSnapshotter

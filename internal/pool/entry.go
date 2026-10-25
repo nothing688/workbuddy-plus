@@ -656,6 +656,9 @@ type stateModelCost struct {
 type stateFile struct {
 	Accounts    map[string]stateAccount `json:"accounts"`
 	ActiveGroup string                  `json:"active_group,omitempty"`
+	// Groups 手工创建、可能还没有账号的分组名（空分组）。账号所属分组由 Accounts 推出，
+	// 这里只补充「尚无成员」的组，避免新建的组刷新后就消失。
+	Groups []string `json:"groups,omitempty"`
 }
 
 // flushInterval 后台落盘周期。

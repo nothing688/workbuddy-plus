@@ -81,6 +81,33 @@ func (p *Panel) groupsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"groups": p.cfg.Pool.GroupCounts()})
 }
 
+// groupsCreate POST /panel/api/groups
+//
+// body {"name":"teamA"} → {"ok":true,"name":"teamA","groups":[...]}。
+// 允许创建暂无账号的空分组（持久化在 state.json 的 groups 字段），
+// 之后可在导入、账号名称/分组弹框、移动分组里选到它。名字为空返回 400。
+func (p *Panel) groupsCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if !p.cfg.Pool.CreateGroup(name) {
+		writeErr(w, http.StatusBadRequest, "invalid name")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "name": name, "groups": p.cfg.Pool.GroupCounts(),
+	})
+}
+
 // accountProbeChat POST /panel/api/accounts/{uid}/probe_chat
 //
 // body {"model":"cn:hy3"}（可选）→ {ok, model, latency_ms, reply, error,
