@@ -554,3 +554,83 @@ func TestAccountProbeChatDefaultModelFallback(t *testing.T) {
 		t.Fatalf("出站 model=%v, want %s", body, probeChatFallbackModel)
 	}
 }
+
+// probeChatForTest 跑一次 probe_chat 并解出前端关心的字段。
+func probeChatForTest(t *testing.T, status int, body string) (pool.Status, map[string]any) {
+	t.Helper()
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			return probeJSONResponse(status, body), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_chat", `{"model":"cn:hy3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := pl.Status("u1")
+	if !ok {
+		t.Fatal("account disappeared")
+	}
+	return st, resp
+}
+
+// TestAccountProbeChatDisablesOn11140 探测命中 11140 账号级风控 → 直接禁用。
+// 否则「测试说不可用、池子照样选它」，用户看到的就是这条不一致。
+func TestAccountProbeChatDisablesOn11140(t *testing.T) {
+	st, resp := probeChatForTest(t, 403, `{"code":11140,"msg":"request illegal","zh":"账号存在异常行为，已暂停"}`)
+	if resp["ok"] == true {
+		t.Fatalf("ok=true, want false: %+v", resp)
+	}
+	if resp["disabled"] != true {
+		t.Fatalf("11140 应自动禁用: %+v", resp)
+	}
+	reason, _ := resp["disabled_reason"].(string)
+	if !strings.Contains(reason, "11140") || !strings.Contains(reason, "账号存在异常行为") {
+		t.Fatalf("禁用原因应带 11140 + 上游 zh 文案，得到 %q", reason)
+	}
+	if !st.Disabled || !strings.Contains(st.DisabledReason, "11140") {
+		t.Fatalf("池状态未禁用: disabled=%v reason=%q", st.Disabled, st.DisabledReason)
+	}
+}
+
+// TestAccountProbeChatChannelCheckKeepsPool 11-128 渠道校验是请求级可重试信号，
+// 处罚账号等于误杀：探测不许改池状态。
+func TestAccountProbeChatChannelCheckKeepsPool(t *testing.T) {
+	st, resp := probeChatForTest(t, 400, `{"code":"11-128","msg":"request illegal: first message is not system prompt"}`)
+	if resp["disabled"] == true {
+		t.Fatalf("11-128 不该禁用: %+v", resp)
+	}
+	if st.Disabled || st.Cooling {
+		t.Fatalf("11-128 改动了池状态: %+v", st)
+	}
+}
+
+// TestAccountProbeChatDisablesOnSessionDead 12153 是登录态终态，探测命中即禁用。
+func TestAccountProbeChatDisablesOnSessionDead(t *testing.T) {
+	st, resp := probeChatForTest(t, 401, `{"code":12153,"msg":"offline session"}`)
+	if resp["disabled"] != true {
+		t.Fatalf("12153 应自动禁用: %+v", resp)
+	}
+	if !st.Disabled {
+		t.Fatalf("池状态未禁用: %+v", st)
+	}
+}
+
+// TestAccountProbeChatRateLimitKeepsPool 429 限流是瞬时故障：探测只报结论，不动池。
+func TestAccountProbeChatRateLimitKeepsPool(t *testing.T) {
+	st, resp := probeChatForTest(t, 429, `{"code":429,"msg":"rate limit"}`)
+	if resp["disabled"] == true {
+		t.Fatalf("429 不该禁用: %+v", resp)
+	}
+	if st.Disabled {
+		t.Fatalf("429 不该禁用账号: %+v", st)
+	}
+}

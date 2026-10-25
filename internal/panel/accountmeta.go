@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -108,19 +109,66 @@ func (p *Panel) groupsCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// probeDisableIfTerminal 把探测到的「终态」失败落到池状态。只有上游明确判死才禁用：
+//   - 11140 request illegal（且不是 11-128 渠道校验）→ 账号级风控，只能申诉
+//   - 12153 session dead → 登录态失效，需重新登录
+//
+// 限流 429、5xx、网络超时、WAF 403、没有 12153 信封的网关 401 一律不动池：
+// 探测是单次观测，瞬时故障不该让号退出选号（网关 401 的误杀复盘见 pool.NoteSessionDead）。
+func (p *Panel) probeDisableIfTerminal(uid string, status int, body string, callErr error) (bool, string) {
+	var kind upstream.ErrKind
+	msg := body
+	var ue *upstream.Error
+	if errors.As(callErr, &ue) {
+		kind, msg = ue.Kind, ue.Msg
+		if status == 0 {
+			status = ue.Status
+		}
+	} else if status > 0 {
+		kind = upstream.Classify(status, body)
+	}
+	switch kind {
+	case upstream.ErrAccountFault:
+		if !strings.Contains(strings.ToLower(msg), "request illegal") {
+			return false, ""
+		}
+		if upstream.HasCodeMarker(msg, "11-128") {
+			return false, "" // 渠道校验：请求级可重试，罚号等于误杀
+		}
+		reason := "11140 账号级风控（request illegal，可用性测试判定）"
+		if zh := upstream.ZhText(msg); zh != "" {
+			reason = "11140 " + zh + "（可用性测试判定，需在 WorkBuddy 内提交反馈申诉解封）"
+		}
+		p.cfg.Pool.Disable(uid, reason)
+		log.Printf("panel: probe_chat uid=%s → 上游判死，已自动禁用", uid)
+		return true, reason
+	case upstream.ErrSessionDead:
+		if !upstream.HasCodeMarker(msg, "12153") {
+			return false, ""
+		}
+		reason := "上游 12153 session dead（可用性测试判定，需重新登录）"
+		p.cfg.Pool.Disable(uid, reason)
+		log.Printf("panel: probe_chat uid=%s → 登录态失效，已自动禁用", uid)
+		return true, reason
+	}
+	return false, ""
+}
+
 // accountProbeChat POST /panel/api/accounts/{uid}/probe_chat
 //
 // body {"model":"cn:hy3"}（可选）→ {ok, model, latency_ms, reply, error,
 // revived, group}。
 //
 // 真的发一条 chat 请求（messages=[user "ping"]、max_tokens 16）来判定账号此刻
-// 能不能用。除一种情况外都是只读探测：不记失败、不冷却、不占在途。探测失败仍是
-// 200 + ok:false，由前端统一渲染错误文案（与 checkin 的非致命错误同风格）。
+// 能不能用。不记成功/失败、不占在途；瞬时失败（429 / 5xx / 网络）不改池状态。
 //
-// 唯一的状态联动：探测**成功**且账号当前 disabled → Pool.Revive 解冻并回归原分组
-// （禁用时移入 DisabledGroup、书签记原组，见 pool 的分组书签语义），这就是面板的
-// 「探测确认可用 → 自动恢复」闭环；响应里 revived=true + group=恢复后的分组。
-// 探测成功但账号本来可用 → revived=false，group 仍是当前分组；探测失败保持原状。
+// 状态联动只有两条，都是「上游已经给出终态判词」才落地：
+//   - 探测成功且账号 disabled → Pool.Revive 解冻并回归原分组（移入 DisabledGroup
+//     时记的书签见 pool 分组语义），响应 revived=true + group；这是「确认可用 → 自动恢复」。
+//   - 探测命中终态故障（11140 账号级风控 / 12153 session dead）→ Pool.Disable，
+//     响应 disabled=true + disabled_reason，避免「测试说不可用、池子照样选它」。
+//     11-128 渠道校验、限流、网关 401（无 12153 信封）都不算终态，不动池。
+// 探测失败仍是 200 + ok:false，由前端统一渲染错误文案（与 checkin 的非致命错误同风格）。
 func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	st, ok := p.cfg.Pool.Status(uid)
@@ -197,6 +245,10 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["latency_ms"] = elapsedMs(start)
 		resp["error"] = callErr.Error()
+		if disabled, reason := p.probeDisableIfTerminal(uid, status, string(respBody), callErr); disabled {
+			resp["disabled"] = true
+			resp["disabled_reason"] = reason
+		}
 		log.Printf("panel: probe_chat uid=%s model=%s 失败: %v", uid, bare, callErr)
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -207,6 +259,10 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["latency_ms"] = elapsedMs(start)
 		resp["error"] = fmt.Sprintf("upstream http %d: %s", status, truncateStr(string(respBody), 200))
+		if disabled, reason := p.probeDisableIfTerminal(uid, status, string(respBody), nil); disabled {
+			resp["disabled"] = true
+			resp["disabled_reason"] = reason
+		}
 		log.Printf("panel: probe_chat uid=%s model=%s http=%d", uid, bare, status)
 		writeJSON(w, http.StatusOK, resp)
 		return

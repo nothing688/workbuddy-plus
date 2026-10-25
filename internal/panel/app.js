@@ -906,7 +906,10 @@ function renderProbeFloat() {
       body = '<div class="pf-err">' + esc(res.error || '探测无明确结论（网络/限流等），稍后再试') + '</div>';
     } else if (res) {
       verdict = '<span class="tag bad">不可用</span>';
-      body = '<div class="pf-err">' + esc(res.error || '测试失败（无错误信息）') + '</div>';
+      // 终态故障（11140 / 12153）后端已顺手禁用：告诉用户池状态变了，
+      // 不用再回行里确认一遍。
+      if (res.disabled) body = '<div class="pf-reply">已自动禁用，池内状态已更新</div>';
+      body += '<div class="pf-err">' + esc(res.error || '测试失败（无错误信息）') + '</div>';
     }
     return '<div class="pf-item"><div class="pf-top">' +
       '<span class="pf-who" title="' + esc(uid) + '">' + esc(name) + '</span>' +
