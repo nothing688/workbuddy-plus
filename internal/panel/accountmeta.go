@@ -3,9 +3,10 @@
 // 三件事各自独立：
 //   - 分组 + 备注是运维自定义元数据（pool.SetMeta 落盘），面板只管读写；
 //   - 分组列表直接透出 pool.GroupCounts 的聚合结果，不在面板侧重算；
-//   - 可用性测试是**只读探测**：真发一条最小 chat 请求拿回一句话，全程不碰
-//     池状态（不记失败、不冷却、不占在途）——探测失败只说明"这次不通"，
-//     不该让运维点一下测试就把账号判死或让号退出选号。
+//   - 可用性测试是**只读探测**：真发一条最小 chat 请求拿回一句话，除「探测成功
+//     且账号当前 disabled」会调 Pool.Revive 解冻并回归原分组外，全程不碰池状态
+//     （不记失败、不冷却、不占在途）——探测失败只说明"这次不通"，不该让运维点
+//     一下测试就把账号判死或让号退出选号。
 package panel
 
 import (
@@ -82,14 +83,21 @@ func (p *Panel) groupsList(w http.ResponseWriter, r *http.Request) {
 
 // accountProbeChat POST /panel/api/accounts/{uid}/probe_chat
 //
-// body {"model":"cn:hy3"}（可选）→ {ok, model, latency_ms, reply, error}。
+// body {"model":"cn:hy3"}（可选）→ {ok, model, latency_ms, reply, error,
+// revived, group}。
 //
 // 真的发一条 chat 请求（messages=[user "ping"]、max_tokens 16）来判定账号此刻
-// 能不能用：只读探测，不记失败、不冷却、不占在途。探测失败仍是 200 + ok:false，
-// 由前端统一渲染错误文案（与 checkin 的非致命错误同风格）。
+// 能不能用。除一种情况外都是只读探测：不记失败、不冷却、不占在途。探测失败仍是
+// 200 + ok:false，由前端统一渲染错误文案（与 checkin 的非致命错误同风格）。
+//
+// 唯一的状态联动：探测**成功**且账号当前 disabled → Pool.Revive 解冻并回归原分组
+// （禁用时移入 DisabledGroup、书签记原组，见 pool 的分组书签语义），这就是面板的
+// 「探测确认可用 → 自动恢复」闭环；响应里 revived=true + group=恢复后的分组。
+// 探测成功但账号本来可用 → revived=false，group 仍是当前分组；探测失败保持原状。
 func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
-	if _, ok := p.cfg.Pool.Status(uid); !ok {
+	st, ok := p.cfg.Pool.Status(uid)
+	if !ok {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
@@ -116,6 +124,8 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 		"latency_ms": int64(0),
 		"reply":      "",
 		"error":      "",
+		"revived":    false,
+		"group":      st.Group,
 	}
 	if p.cfg.Upstream == nil {
 		resp["error"] = "upstream client not configured"
@@ -200,6 +210,15 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 	resp["ok"] = true
 	resp["reply"] = truncateReply(reply)
 	log.Printf("panel: probe_chat uid=%s model=%s ok latency=%dms", uid, bare, latency)
+
+	// 探测确认可用 → 禁用号自动恢复：Revive 解冻并（有书签时）回归原分组。
+	// 先重新读一次状态：探测耗时最长 30s，期间账号可能已被别处禁用/恢复。
+	if cur, ok := p.cfg.Pool.Status(uid); ok && cur.Disabled && p.cfg.Pool.Revive(uid) {
+		after, _ := p.cfg.Pool.Status(uid)
+		resp["revived"] = true
+		resp["group"] = after.Group
+		log.Printf("panel: probe_chat 恢复 uid=%s group=%s", uid, after.Group)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

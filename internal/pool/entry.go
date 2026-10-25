@@ -120,6 +120,14 @@ type Status struct {
 	// 不参与健康判定。
 	Group string `json:"group"`
 	Note  string `json:"note"`
+	// PrevGroup / GroupParked 禁用分组书签：账号被禁用时自动移入 DisabledGroup，
+	// 书签记下原分组；恢复时回归原组并清空书签。
+	//   - GroupParked=false：没有书签（从未因禁用被搬动，或已恢复 / 被人工移动清掉）；
+	//   - GroupParked=true 且 PrevGroup=""：禁用前就是未分组——与「没记录」区分开，
+	//     恢复时必须回到空分组而不是留在 DisabledGroup。
+	// 仅供面板展示「从哪个组来的」，不参与健康判定。
+	PrevGroup   string `json:"prev_group"`
+	GroupParked bool   `json:"group_parked"`
 	// Enterprise 企业版账号（auth.EnterpriseID 非空，计算值不落盘）。
 	// 企业版无个人成长体系（签到/成长任务/连登/旅行/夜猫子 上游均拒），
 	// 面板据此隐藏对应按钮；选号、保活、额度展示不受影响。
@@ -258,9 +266,17 @@ type entry struct {
 	// 只影响按组选号（PickExcludingForRealmGroup）与面板展示，不参与健康判定。
 	group string
 	note  string
-	coolKind       CoolKind
-	until          time.Time // 冷却截止（即时冷却：CoolSoft 429 / CoolHard 余额耗尽）
-	disabled       bool
+	// prevGroup / groupParked 禁用分组书签（见 transition.go 的 disableLocked）。
+	// 账号从「非禁用」转为「禁用」时，若当前不在 DisabledGroup，就把原分组记在这里
+	// 并移入 DisabledGroup；Revive/ReviveDisabled 据此回归原组。
+	// groupParked 是「确有书签」的权威标志：prevGroup 为空串同样是合法记录
+	//（禁用前未分组），不能拿空串当「没记录」。人工改分组（SetMeta）会清掉两者。
+	// 持久化（stateAccount.PrevGroup/GroupParked）：重启后恢复仍能跳回原组。
+	prevGroup   string
+	groupParked bool
+	coolKind    CoolKind
+	until       time.Time // 冷却截止（即时冷却：CoolSoft 429 / CoolHard 余额耗尽）
+	disabled    bool
 	// paused 暂停选号：与 disabled 正交。置位后退出选号候选（healthy 判否），
 	// 但保号任务遍历只按 Disabled 过滤，故 paused 号天然继续参与签到 / 活跃上报 /
 	// 保活 / 余额刷新。持久化（state.json），跨重启不丢。
@@ -601,6 +617,10 @@ type stateAccount struct {
 	// 同源，随 state.json / Redis 快照一起往返（快照复用本结构，无需另加字段）。
 	Group string `json:"group,omitempty"`
 	Note  string `json:"note,omitempty"`
+	// PrevGroup / GroupParked 禁用分组书签（entry.prevGroup/groupParked 同源）：
+	// 禁用时账号被移入 DisabledGroup，PrevGroup 记原分组，GroupParked 标记书签存在。
+	PrevGroup   string `json:"prev_group,omitempty"`
+	GroupParked bool   `json:"group_parked,omitempty"`
 }
 
 // stateModelCooldown 单个 (账号, 模型) 的模型级独立冷却持久化记录，与运行态

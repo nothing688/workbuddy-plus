@@ -123,12 +123,15 @@ func TestPoolActiveGroupsAggregation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET code=%d body=%s", rec.Code, rec.Body.String())
 	}
+	// 禁用语义：Disable 会把账号移入「已禁用」组并记录原分组书签（prev_group），
+	// 所以 teamA 只剩未禁用的 u1，u2 单独计入「已禁用」桶（字典序在空名字之前）。
 	want := []struct {
 		name          string
 		total, health int
 	}{
-		{"teamA", 2, 1},
+		{"teamA", 1, 1},
 		{"teamB", 1, 1},
+		{"已禁用", 1, 0},
 		{"", 1, 1},
 	}
 	if len(out.Groups) != len(want) {

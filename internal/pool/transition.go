@@ -15,6 +15,8 @@
 //	breakerUntil       ← recordBreakerFailureLocked（Cooldown/NoteError 喂入）；NoteSuccess 清
 //	softStreak         ← Cooldown(CoolSoft)/CooldownSoftForModel；NoteSuccess 清（revive 保留：与余额无关）
 //	sessionDeadFails   ← NoteSessionDead；ClearSessionDead/NoteSuccess/ReviveDisabled 清
+//	group/prevGroup/   ← disableLocked（非禁用→禁用那一次移入 DisabledGroup 并记原组）；
+//	groupParked           restoreGroupLocked（Revive/ReviveDisabled 回归原组）；SetMeta 清书签
 //
 // 关键正交性（疑点 4 修正）：
 //   - 冷却域（until/coolKind/softStreak/modelCooldowns）与熔断器（fails/retryCount/
@@ -48,7 +50,18 @@ func (e *entry) clearCoolingLocked() {
 //
 // 熔断器保留：熔断是「连续 5xx 失败」信号（与授权/会话无关），禁用后再复活时
 // 熔断观测仍有效，不应被禁用覆盖。
+//
+// 分组书签：只在「非禁用 → 禁用」这一次把账号移入 DisabledGroup 并记下原分组，
+// 供 Revive/ReviveDisabled 回归。重复 disable（已禁用，只是更新 reason）不再记录
+// ——否则原分组会被 DisabledGroup 覆盖，恢复后永远回不到真正的原组。
 func (p *Pool) disableLocked(e *entry, reason string) {
+	// 注意顺序：必须先用旧的 disabled 值判定「本次是否进入禁用」，再置位。
+	if !e.disabled && e.group != DisabledGroup {
+		// 原分组为空串（未分组）也是合法记录：groupParked=true 与「没记录」区分。
+		e.prevGroup = e.group
+		e.groupParked = true
+		e.group = DisabledGroup
+	}
 	e.clearCoolingLocked()
 	e.disabled = true
 	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）
@@ -57,6 +70,20 @@ func (p *Pool) disableLocked(e *entry, reason string) {
 	// 两者处置优先级差很远（后者往往意味着没人看面板）。
 	e.disabledAt = time.Now()
 	p.dirty.Store(true)
+}
+
+// restoreGroupLocked 恢复禁用期间被移入 DisabledGroup 的分组：有书签则回归
+// prevGroup（空串 = 未分组，同样是一次有效恢复），并清空书签。
+// 无书签（groupParked=false）时不碰 group——账号可能已被运维人工分组（SetMeta
+// 会清书签），也可能禁用时本就在 DisabledGroup，两种都不该被恢复动作搬运。
+// 调用方必须已持有 p.mu。
+func (p *Pool) restoreGroupLocked(e *entry) {
+	if !e.groupParked {
+		return
+	}
+	e.group = e.prevGroup
+	e.prevGroup = ""
+	e.groupParked = false
 }
 
 // pauseLocked 暂停选号迁移：置 paused 使账号退出选号候选（healthy 判否），

@@ -127,6 +127,9 @@ func TestAccountSetMeta(t *testing.T) {
 }
 
 // TestGroupsAggregation 分组列表直接透出 pool.GroupCounts（含未分组桶与 health 口径）。
+//
+// 禁用会把账号移入 pool.DisabledGroup（书签记原组），故 teamA 的 Total 只剩未禁用的
+// 1 个，被禁用的 u2 单独计入「已禁用」桶（Healthy=0）。
 func TestGroupsAggregation(t *testing.T) {
 	pl := pool.New("")
 	t.Cleanup(pl.Close)
@@ -136,7 +139,7 @@ func TestGroupsAggregation(t *testing.T) {
 	pl.SetMeta("u1", "teamA", "")
 	pl.SetMeta("u2", "teamA", "")
 	pl.SetMeta("u3", "teamB", "")
-	pl.Disable("u2", "401") // teamA 只剩 1 个健康
+	pl.Disable("u2", "401") // u2 移入「已禁用」，teamA 只剩 1 个健康号
 
 	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl})
 	rec := doAccountMetaRequest(t, pn, "GET", "/panel/api/groups", "")
@@ -150,8 +153,9 @@ func TestGroupsAggregation(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []pool.GroupInfo{
-		{Name: "teamA", Total: 2, Healthy: 1},
+		{Name: "teamA", Total: 1, Healthy: 1},
 		{Name: "teamB", Total: 1, Healthy: 1},
+		{Name: pool.DisabledGroup, Total: 1, Healthy: 0},
 		{Name: "", Total: 1, Healthy: 1},
 	}
 	if len(resp.Groups) != len(want) {
@@ -161,6 +165,42 @@ func TestGroupsAggregation(t *testing.T) {
 		if resp.Groups[i] != want[i] {
 			t.Fatalf("groups[%d]=%+v, want %+v (all=%+v)", i, resp.Groups[i], want[i], resp.Groups)
 		}
+	}
+
+	// 禁用书签：原组记在 PrevGroup，Revive 后回归 teamA（分组聚合随之恢复）。
+	st, ok := pl.Status("u2")
+	if !ok || st.Group != pool.DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
+		t.Fatalf("禁用后 group=%q parked=%v prev=%q, want %q/true/teamA",
+			st.Group, st.GroupParked, st.PrevGroup, pool.DisabledGroup)
+	}
+	if !pl.Revive("u2") {
+		t.Fatal("Revive(u2)=false")
+	}
+	st, _ = pl.Status("u2")
+	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" || st.Disabled {
+		t.Fatalf("Revive 后 group=%q parked=%v prev=%q disabled=%v, want teamA/false/\"\"/false",
+			st.Group, st.GroupParked, st.PrevGroup, st.Disabled)
+	}
+	// 回归后 teamA 又是 2 个（u2 已解冻）。
+	rec = doAccountMetaRequest(t, pn, "GET", "/panel/api/groups", "")
+	resp.Groups = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, g := range resp.Groups {
+		if g.Name == "teamA" {
+			found = true
+			if g.Total != 2 || g.Healthy != 2 {
+				t.Fatalf("Revive 后 teamA=%+v, want total/healthy=2/2", g)
+			}
+		}
+		if g.Name == pool.DisabledGroup {
+			t.Fatalf("Revive 后不应再有「已禁用」桶：%+v", resp.Groups)
+		}
+	}
+	if !found {
+		t.Fatalf("Revive 后缺少 teamA：%+v", resp.Groups)
 	}
 }
 
@@ -290,12 +330,21 @@ func TestAccountProbeChatSuccess(t *testing.T) {
 		LatencyMS int64  `json:"latency_ms"`
 		Reply     string `json:"reply"`
 		Error     string `json:"error"`
+		Revived   bool   `json:"revived"`
+		Group     string `json:"group"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if !resp.OK || resp.Model != "cn:hy3" || resp.Reply != "pong" || resp.Error != "" {
 		t.Fatalf("resp=%+v, want ok/model=cn:hy3/reply=pong", resp)
+	}
+	// 本来就可用的号：探测成功不得「复活」，分组原样回显（此号未分组 = 空串）。
+	if resp.Revived {
+		t.Fatalf("resp=%+v, 可用账号不该 revived", resp)
+	}
+	if resp.Group != "" {
+		t.Fatalf("group=%q, want 空（账号未分组）", resp.Group)
 	}
 	if resp.LatencyMS < 0 {
 		t.Fatalf("latency_ms=%d 必须非负", resp.LatencyMS)
@@ -325,6 +374,96 @@ func TestAccountProbeChatSuccess(t *testing.T) {
 	// 只读探测：成功也不改池状态（不记成功、不占在途）。
 	if st, _ := pl.Status("u1"); st.SuccessCount != 0 || st.ErrTotal != 0 || st.Cooling || st.Disabled {
 		t.Fatalf("探测改动了池状态：%+v", st)
+	}
+}
+
+// TestAccountProbeChatRevivesDisabled 探测确认可用 → 禁用号自动解冻并回归原分组；
+// 响应带 revived=true + 恢复后的分组。
+func TestAccountProbeChatRevivesDisabled(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				return probeSSEResponse(
+					"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pong\"}}]}\n\n" +
+						"data: [DONE]\n\n"), nil
+			}
+			return probeJSONResponse(500, `{"code":500,"msg":"no models"}`), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	if !pl.SetMeta("u1", "teamA", "") {
+		t.Fatal("SetMeta failed")
+	}
+	pl.Disable("u1", "401")
+	if st, _ := pl.Status("u1"); !st.Disabled || st.Group != pool.DisabledGroup || st.PrevGroup != "teamA" {
+		t.Fatalf("前置失败: disabled=%v group=%q prev=%q", st.Disabled, st.Group, st.PrevGroup)
+	}
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_chat", `{"model":"cn:hy3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK      bool   `json:"ok"`
+		Revived bool   `json:"revived"`
+		Group   string `json:"group"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || !resp.Revived || resp.Group != "teamA" {
+		t.Fatalf("resp=%+v, want ok/revived/group=teamA", resp)
+	}
+	st, ok := pl.Status("u1")
+	if !ok || st.Disabled {
+		t.Fatalf("探测成功后仍禁用：%+v", st)
+	}
+	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("恢复后 group=%q parked=%v prev=%q, want teamA/false/\"\"",
+			st.Group, st.GroupParked, st.PrevGroup)
+	}
+}
+
+// TestAccountProbeChatFailureKeepsDisabled 探测失败 → 保持禁用与原分组书签，
+// 响应 ok:false 且 revived:false（失败不得顺手解冻）。
+func TestAccountProbeChatFailureKeepsDisabled(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			return probeJSONResponse(500, `{"code":500,"msg":"boom"}`), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pl.SetMeta("u1", "teamA", "")
+	pl.Disable("u1", "401")
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_chat", `{"model":"cn:hy3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK      bool   `json:"ok"`
+		Revived bool   `json:"revived"`
+		Group   string `json:"group"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK || resp.Revived {
+		t.Fatalf("resp=%+v, want ok:false revived:false", resp)
+	}
+	if resp.Group != pool.DisabledGroup {
+		t.Fatalf("group=%q, want %q（失败不改分组）", resp.Group, pool.DisabledGroup)
+	}
+	st, _ := pl.Status("u1")
+	if !st.Disabled || st.Group != pool.DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
+		t.Fatalf("探测失败后状态被改：disabled=%v group=%q parked=%v prev=%q",
+			st.Disabled, st.Group, st.GroupParked, st.PrevGroup)
 	}
 }
 

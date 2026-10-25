@@ -83,6 +83,7 @@ func (p *Pool) ClearSessionDead(uid string) {
 
 // ReviveDisabled 人工/端点复活入口：清除 disabled + reason + 连续 12153 计数，
 // 账号回到池子（若无其他冷却/熔断则立即可选，健康检查自然接管）。
+// 同时按分组书签回归禁用前的分组（见 restoreGroupLocked）。
 // **不改** Disabled 在选号/状态端点的既有语义：disabled 号依然不参与选号，
 // 直到被本方法复活。不存在的 uid 为空操作。
 func (p *Pool) ReviveDisabled(uid string) {
@@ -93,6 +94,7 @@ func (p *Pool) ReviveDisabled(uid string) {
 		e.reason = ""
 		e.disabledAt = time.Time{}
 		e.sessionDeadFails = 0
+		p.restoreGroupLocked(e)
 		p.dirty.Store(true)
 	}
 }
@@ -100,6 +102,7 @@ func (p *Pool) ReviveDisabled(uid string) {
 // Revive 运维口径的"无条件恢复"：清禁用、冷却（含软退避计数）与熔断运行态。
 // 与 ReviveDisabled（只清禁用）和 ReenableIfCredits（只清冷却、不动熔断）的区别：
 // 本方法清除全部惩罚状态，供管理面板"解冻"按钮使用——人工判断该号可用时一键恢复。
+// 分组同 ReviveDisabled：按书签回归禁用前的分组。
 // uid 不存在返回 false（供调用方区分"账号不存在"与"已复活"）。
 func (p *Pool) Revive(uid string) bool {
 	p.mu.Lock()
@@ -110,6 +113,7 @@ func (p *Pool) Revive(uid string) bool {
 	}
 	e.disabled = false
 	e.paused = false // 解冻是全清：暂停选号一并解除
+	p.restoreGroupLocked(e)
 	e.until = time.Time{}
 	e.coolKind = 0
 	e.reason = ""
@@ -787,6 +791,8 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		APIKey:                   e.a.IsAPIKey(),
 		Group:                    e.group,
 		Note:                     e.note,
+		PrevGroup:                e.prevGroup,
+		GroupParked:              e.groupParked,
 		Nickname:                 e.a.Nickname,
 		Credits:                  e.credits,
 		CreditsTotal:             e.creditsTotal,

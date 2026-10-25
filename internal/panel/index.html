@@ -334,6 +334,10 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 }
 .grp-badge:hover:not(:disabled) { border-color: var(--accent); }
 .grp-badge.none { color: var(--ink-3); background: var(--surface-2); border-color: var(--line); }
+/* 禁用号被自动搬进「已禁用」组（后端的原分组书签 group_parked）：徽章走告警色调，
+   和人工建的同名分组区分开；title 里写明原分组与恢复后自动回归。 */
+.grp-badge.parked { color: var(--bad); background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.grp-badge.parked:hover:not(:disabled) { border-color: var(--bad); }
 /* 当前调用池：账号池卡片头部下方的常驻条。徽章复用 .grp-badge，与每行分组徽章
    同一视觉语言；下拉只选候选，必须点「切换」才落库。 */
 .pool-active {
@@ -823,7 +827,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
         <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
+        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分剩余（不含禁用）/ 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
       </div>
 

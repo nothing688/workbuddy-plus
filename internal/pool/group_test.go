@@ -75,10 +75,12 @@ func TestMetaRoundTrip(t *testing.T) {
 }
 
 // TestGroupCounts 验证聚合与 healthy 计数（healthy 用账号级口径：禁用/冷却都不算健康）。
+// 注意禁用会把账号移入 DisabledGroup（见 group_test.go 的禁用书签测试），故 u2 计入
+// 「已禁用」而非 team-a。
 func TestGroupCounts(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"}) // team-a，健康
-	p.Add(&auth.Auth{UID: "u2"}) // team-a，禁用
+	p.Add(&auth.Auth{UID: "u2"}) // team-a，禁用 → 落入「已禁用」
 	p.Add(&auth.Auth{UID: "u3"}) // team-b，冷却中
 	p.Add(&auth.Auth{UID: "u4"}) // 未分组，健康
 	p.Add(&auth.Auth{UID: "u5"}) // team-b，健康
@@ -91,8 +93,9 @@ func TestGroupCounts(t *testing.T) {
 
 	got := p.GroupCounts()
 	want := []GroupInfo{
-		{Name: "team-a", Total: 2, Healthy: 1},
+		{Name: "team-a", Total: 1, Healthy: 1},
 		{Name: "team-b", Total: 2, Healthy: 1},
+		{Name: DisabledGroup, Total: 1, Healthy: 0},
 		{Name: "", Total: 1, Healthy: 1}, // 未分组排最后
 	}
 	if len(got) != len(want) {
@@ -211,5 +214,203 @@ func TestPickExcludingForRealmGroupEmptyEqualsOld(t *testing.T) {
 		if !seenNew[uid] || !seenOld[uid] {
 			t.Fatalf("uid %s not seen: new=%v old=%v", uid, seenNew, seenOld)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 禁用分组书签：禁用移入 DisabledGroup，恢复回归原组
+// ---------------------------------------------------------------------------
+
+// TestDisableParksGroupAndReviveRestores 覆盖主路径：teamA → 禁用 → 已禁用
+// （书签记录原组）→ Revive → 回到 teamA 且标记清空。两个恢复入口都要生效。
+func TestDisableParksGroupAndReviveRestores(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	p.SetMeta("u1", "teamA", "")
+
+	p.Disable("u1", "401")
+	st, ok := p.Status("u1")
+	if !ok {
+		t.Fatal("Status(u1) not found")
+	}
+	if st.Group != DisabledGroup {
+		t.Fatalf("after Disable group=%q, want %q", st.Group, DisabledGroup)
+	}
+	if !st.GroupParked || st.PrevGroup != "teamA" {
+		t.Fatalf("after Disable parked=%v prev=%q, want true/teamA", st.GroupParked, st.PrevGroup)
+	}
+
+	// Revive：回归原组并清书签。
+	if !p.Revive("u1") {
+		t.Fatal("Revive(u1) = false, want true")
+	}
+	st, _ = p.Status("u1")
+	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("after Revive group=%q parked=%v prev=%q, want teamA/false/\"\"", st.Group, st.GroupParked, st.PrevGroup)
+	}
+
+	// ReviveDisabled：同一套书签语义。
+	p.Disable("u1", "401")
+	p.ReviveDisabled("u1")
+	st, _ = p.Status("u1")
+	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("after ReviveDisabled group=%q parked=%v prev=%q, want teamA/false/\"\"", st.Group, st.GroupParked, st.PrevGroup)
+	}
+}
+
+// TestDisableParksUngroupedAccount 原分组为空（未分组）是一次有效记录：
+// 禁用后同样进「已禁用」，恢复后必须回到空分组，而不是留在「已禁用」。
+func TestDisableParksUngroupedAccount(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	// 不调 SetMeta：group 为空串（未分组）。
+
+	p.Disable("u1", "401")
+	st, _ := p.Status("u1")
+	if st.Group != DisabledGroup || !st.GroupParked {
+		t.Fatalf("after Disable group=%q parked=%v, want %q/true", st.Group, st.GroupParked, DisabledGroup)
+	}
+	if st.PrevGroup != "" {
+		t.Fatalf("ungrouped prev=%q, want empty (记录存在但值为空)", st.PrevGroup)
+	}
+
+	p.ReviveDisabled("u1")
+	st, _ = p.Status("u1")
+	if st.Group != "" || st.GroupParked {
+		t.Fatalf("after Revive group=%q parked=%v, want \"\"/false (回到未分组)", st.Group, st.GroupParked)
+	}
+}
+
+// TestDisableAgainKeepsPrevGroup 已禁用账号再禁用（只更新 reason）不得覆盖原分组，
+// 否则恢复后会被搬到「已禁用」自身，永远回不到 teamA。
+func TestDisableAgainKeepsPrevGroup(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	p.SetMeta("u1", "teamA", "")
+
+	p.Disable("u1", "401")
+	p.Disable("u1", "manual ban")
+	st, _ := p.Status("u1")
+	if st.Group != DisabledGroup {
+		t.Fatalf("repeat disable group=%q, want %q", st.Group, DisabledGroup)
+	}
+	if !st.GroupParked || st.PrevGroup != "teamA" {
+		t.Fatalf("repeat disable parked=%v prev=%q, want true/teamA", st.GroupParked, st.PrevGroup)
+	}
+	if st.DisabledReason != "manual ban" {
+		t.Fatalf("repeat disable reason=%q, want manual ban", st.DisabledReason)
+	}
+
+	p.Revive("u1")
+	if st, _ = p.Status("u1"); st.Group != "teamA" {
+		t.Fatalf("after Revive group=%q, want teamA", st.Group)
+	}
+}
+
+// TestDisableThenSetMetaWins 人工移动优先：禁用后手动改到 teamB，恢复时留在 teamB。
+// 显式设置成 DisabledGroup 同样按普通分组处理（清书签），恢复也不跳回。
+func TestDisableThenSetMetaWins(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	p.Add(&auth.Auth{UID: "u2"})
+	p.SetMeta("u1", "teamA", "")
+	p.SetMeta("u2", "teamA", "")
+	p.Disable("u1", "401")
+	p.Disable("u2", "401")
+
+	p.SetMeta("u1", "teamB", "")
+	st, _ := p.Status("u1")
+	if st.Group != "teamB" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("SetMeta(group) → group=%q parked=%v prev=%q, want teamB/false/\"\"", st.Group, st.GroupParked, st.PrevGroup)
+	}
+	p.Revive("u1")
+	if st, _ = p.Status("u1"); st.Group != "teamB" {
+		t.Fatalf("after Revive group=%q, want teamB (人工移动优先)", st.Group)
+	}
+
+	// 显式设成 DisabledGroup：按普通分组处理，清标记后恢复不跳回 teamA。
+	p.SetMeta("u2", DisabledGroup, "")
+	st, _ = p.Status("u2")
+	if st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("SetMeta(DisabledGroup) parked=%v prev=%q, want false/\"\"", st.GroupParked, st.PrevGroup)
+	}
+	p.Revive("u2")
+	if st, _ = p.Status("u2"); st.Group != DisabledGroup {
+		t.Fatalf("after Revive group=%q, want %q (显式禁用分组保持)", st.Group, DisabledGroup)
+	}
+}
+
+// TestGroupParkRoundTrip 落盘 → 重载后书签保留（含「原分组为空」这一形态），
+// 且重载后恢复仍能回归原组。
+func TestGroupParkRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "state.json")
+	p := New(fp)
+	p.Add(&auth.Auth{UID: "u1"})
+	p.Add(&auth.Auth{UID: "u2"})
+	p.SetMeta("u1", "teamA", "")
+	p.Disable("u1", "401")
+	p.Disable("u2", "401") // 未分组 → 书签值为空串
+	p.Flush()
+	p.Close()
+
+	p2 := New(fp)
+	defer p2.Close()
+	p2.Add(&auth.Auth{UID: "u1"})
+	p2.Add(&auth.Auth{UID: "u2"})
+
+	st, ok := p2.Status("u1")
+	if !ok || st.Group != DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
+		t.Fatalf("reloaded u1=%+v ok=%v, want 已禁用/parked/teamA", st, ok)
+	}
+	st, ok = p2.Status("u2")
+	if !ok || st.Group != DisabledGroup || !st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("reloaded u2=%+v ok=%v, want 已禁用/parked/\"\"", st, ok)
+	}
+
+	p2.Revive("u1")
+	p2.Revive("u2")
+	if st, _ := p2.Status("u1"); st.Group != "teamA" {
+		t.Fatalf("reloaded Revive u1 group=%q, want teamA", st.Group)
+	}
+	if st, _ := p2.Status("u2"); st.Group != "" {
+		t.Fatalf("reloaded Revive u2 group=%q, want empty", st.Group)
+	}
+}
+
+// TestGroupParkSnapshotRestore Redis 快照恢复路径（adoptSnapshot 复用
+// applyAccountsLocked）同样带上 prevGroup/groupParked。
+func TestGroupParkSnapshotRestore(t *testing.T) {
+	// 快照镜像只在有 state.json 路径时随落盘发生（saveLocked 先判 stateFp）。
+	p := New(filepath.Join(t.TempDir(), "state.json"))
+	p.Add(&auth.Auth{UID: "u1"})
+	p.SetMeta("u1", "teamA", "")
+	p.Disable("u1", "401")
+	ms := &memStore{}
+	p.SetStore(ms)
+	p.Flush()
+
+	ms.mu.Lock()
+	hasSnap := len(ms.saved) > 0
+	// memStore 的读、写槽分开：把落盘镜像接到 LoadState 上模拟 Redis 取回。
+	ms.loadData = append([]byte(nil), ms.saved...)
+	ms.loadOK = hasSnap
+	ms.mu.Unlock()
+	if !hasSnap {
+		t.Fatal("Flush 未写快照")
+	}
+
+	// 本地 state.json 不存在 → 采用 Redis 快照（adoptSnapshot 路径）。
+	p2 := New(filepath.Join(t.TempDir(), "absent.json"))
+	p2.SetStore(ms)
+	p2.RestoreFromSnapshot()
+	p2.Add(&auth.Auth{UID: "u1"})
+	st, ok := p2.Status("u1")
+	if !ok || st.Group != DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
+		t.Fatalf("snapshot u1=%+v ok=%v, want 已禁用/parked/teamA", st, ok)
+	}
+	p2.Revive("u1")
+	if st, _ := p2.Status("u1"); st.Group != "teamA" {
+		t.Fatalf("snapshot Revive group=%q, want teamA", st.Group)
 	}
 }

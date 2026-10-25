@@ -561,9 +561,19 @@ function renderAccounts(list, filtered, probe) {
     // 没有备注 → 只显示原昵称。这是唯一的备注入口（点账号名即编辑），本机
     // localStorage 备注已移除——同一账号在不同设备上名字必须一致。
     const grp = String(s.group == null ? '' : s.group);
+    // 禁用号被后端自动搬进「已禁用」组，group_parked 是「原分组书签」：徽章改成告警色调，
+    // title 交代原分组与恢复后自动回归。group_parked 为真但 disabled 为假属于异常残留
+    // （书签没清掉），此时按普通分组展示，不能误标成已禁用。
+    const parked = !!s.group_parked && !!s.disabled;
+    const prevGrp = String(s.prev_group == null ? '' : s.prev_group);
     const noteText = String(s.note == null ? '' : s.note);
-    const grpCell = '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
-      '" title="' + esc(grp ? '分组：' + grp + '（点击移动到其他组）' : '未分组（点击入组）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
+    const grpCell = parked
+      ? '<button class="grp-badge parked" data-a="movegroup" data-u="' + esc(s.uid) +
+        '" title="' + esc(prevGrp
+          ? '已禁用（原分组 ' + prevGrp + '，恢复后自动回归）'
+          : '已禁用（原为未分组）') + '">已禁用</button>'
+      : '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
+        '" title="' + esc(grp ? '分组：' + grp + '（点击移动到其他组）' : '未分组（点击入组）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
     const nickHtml = s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>';
     const nameHtml = noteText
       ? esc(noteText) + '<span class="rm-ghost">' + nickHtml + '</span>'
@@ -1053,9 +1063,15 @@ async function loadOverview(quiet) {
     $('sDisabled').textContent = d.disabled;
     // 暂停选号单列（issue #125）：它只关选号、照常签到保活，与禁用是两种状态。
     if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
-    const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
-  const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
-  $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    // 积分口径（两个数分母不同，标签里已标注）：剩余合计**排除已禁用账号**——它们不参与
+    // 选号，账上的剩余额度实际上花不出去；总额合计**包含全部账号**，看的是保有量。
+    const accs = d.accounts || [];
+    const remSum = accs.reduce((a, s) => a + (s.disabled ? 0 : (s.credits || 0)), 0);
+    const totSum = accs.reduce((a, s) => a + (s.credits_total || 0), 0);
+    $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    $('sCredits').title = d.disabled
+      ? '剩余合计（不含已禁用 ' + d.disabled + ' 个账号）/ 总额合计（含全部账号）'
+      : '剩余合计 / 总额合计（均含全部账号）';
     $('sSticky').textContent = d.sticky_sessions;
     $('navSub').textContent = 'v' + d.version;
     $('navVer').textContent = 'v' + d.version;

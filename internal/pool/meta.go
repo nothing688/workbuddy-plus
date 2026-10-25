@@ -1,8 +1,11 @@
 // meta.go 账号「分组 + 备注」：运维自定义的元数据（非凭证、非健康状态）。
 //
-// 定位：分组只用于「按组选号」（PickExcludingForRealmGroup）与面板归类，与自动机制
-// （冷却/熔断/降权）完全正交——设分组不动任何状态机字段，健康判定也不看分组。
-// 存储：stateAccount.Group/Note，随 state.json 与 Redis 快照一起往返（同源结构）。
+// 定位：分组只用于「按组选号」（PickExcludingForRealmGroup）与面板归类，不参与任何
+// 健康判定（冷却/熔断/降权）。唯一的联动是「禁用时移入 DisabledGroup、恢复时回归
+// 原组」（书签语义，见 entry.prevGroup）：那是禁用状态机的一次副作用，仍然只改
+// group 及其书签，不动任何惩罚字段。
+// 存储：stateAccount.Group/Note/PrevGroup/GroupParked，随 state.json 与 Redis 快照
+// 一起往返（同源结构）。
 package pool
 
 import (
@@ -11,12 +14,19 @@ import (
 	"time"
 )
 
+// DisabledGroup 禁用账号的统一归集分组：账号被禁用（自动或手动）时移入此处，
+// 恢复时回归禁用前的分组。导出供面板据此显示特殊分组/判断。
+const DisabledGroup = "已禁用"
+
 // SetMeta 设置账号的分组名与备注（两个值都 TrimSpace；空串 = 清除）。
 //
 // 语义：
 //   - uid 不存在 → 返回 false（供调用方区分「账号不存在」与「已写入」）；
 //   - 两个值都未变化 → 不置 dirty（避免无意义的落盘），但仍返回 true（账号存在）；
-//   - 有变化 → 写 entry 并置 dirty，由后台 flusher / Flush 落盘。
+//   - 有变化 → 写 entry 并置 dirty，由后台 flusher / Flush 落盘；
+//   - 人工移动优先：显式设置分组即清掉禁用书签（prevGroup/groupParked），此后
+//     Revive 不再把账号搬回禁用前的分组。显式设成 DisabledGroup 也按普通分组处理，
+//     同样清标记。即便传入的分组恰好等于当前值（例如手动确认「已禁用」），也要清。
 //
 // 落盘路径与其它 setter 一致（dirty + saveLocked），没有额外的持久化钩子。
 func (p *Pool) SetMeta(uid, group, note string) bool {
@@ -28,10 +38,18 @@ func (p *Pool) SetMeta(uid, group, note string) bool {
 	if !ok {
 		return false
 	}
-	if e.group == group && e.note == note {
+	changed := e.group != group || e.note != note
+	e.group, e.note = group, note
+	// 书签清理独立于「分组是否变化」：运维只要显式点了分组（哪怕同值），
+	// 就是在宣告人工归属，恢复时不该跳回旧组。
+	if e.groupParked || e.prevGroup != "" {
+		e.groupParked = false
+		e.prevGroup = ""
+		changed = true
+	}
+	if !changed {
 		return true
 	}
-	e.group, e.note = group, note
 	p.dirty.Store(true)
 	return true
 }
