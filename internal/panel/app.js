@@ -1248,7 +1248,12 @@ async function loadOverview(quiet) {
     $('navState').textContent = d.healthy > 0 ? '服务正常' : (d.total ? '无可用账号' : '待添加账号');
     const p = $('navPulse');
     p.className = 'pulse' + (d.healthy > 0 ? '' : (d.total ? ' warn' : ' bad'));
-    $('accNote').textContent = d.in_flight_full ? d.in_flight_full + ' 个账号在途占满' : '';
+    // 在途占满 = 所有可用账号都到并发上限，新请求只能排队或换号；挂标题旁的淡色小字。
+    const noteEl = $('accNote');
+    if (noteEl) {
+      noteEl.textContent = d.in_flight_full ? d.in_flight_full + ' 个账号在途占满' : '';
+      noteEl.title = d.in_flight_full ? '这些可用账号的并发已打满，新请求会排队或换号' : '';
+    }
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     // 分组筛选 + 可用性测试状态在这里落地。用 typeof 兜底：顶层单测只切这一段 JS
