@@ -1,0 +1,5 @@
+workspace:
+  launch:
+    # 环境创建后不自动跳进 WebIDE，停在 IDE 入口选择页，
+    # 由使用者自行选择 WebIDE / VS Code / Cursor / CodeBuddy Web 等入口
+    autoOpenWebIDE: false
