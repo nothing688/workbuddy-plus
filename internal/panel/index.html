@@ -2264,6 +2264,7 @@ input::placeholder { color: var(--ink-3); }
       <div id="addTabImport" class="tab-panel" hidden>
         <div class="hint" style="margin-bottom:8px">选择 JSON 文件批量导入账号。支持三种结构：账号数组、单个账号对象、<code>{"accounts":[...]}</code> 包裹；必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选。兼容常见别名字段（<code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等），过期时间戳秒或毫秒均可。</div>
         <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
+        <datalist id="metaGroupList"></datalist>
         <input type="file" id="importFile" accept=".json" style="margin-bottom:8px">
         <div id="importDone" class="state ok" hidden></div>
         <div id="importErr" class="state err" hidden></div>
@@ -2314,9 +2315,8 @@ input::placeholder { color: var(--ink-3); }
         <span class="hint">显示在账号名前面（原昵称变灰跟在后面）；保存后所有打开面板的人都能看到。</span>
       </label>
       <label class="fld"><span class="lb">分组</span>
-        <input id="metaGroup" list="metaGroupList" placeholder="留空 = 未分组" autocomplete="off">
-        <datalist id="metaGroupList"></datalist>
-        <span class="hint">同组账号可在账号池顶部按分组筛选；名字相同的账号自动归为一组。</span>
+        <select id="metaGroupSel"><option value="">未分组</option></select>
+        <span class="hint">从现有分组里选择；要新建分组请在账号池里点分组徽章，或导入时填写。</span>
       </label>
       <div class="state err" id="metaErr" hidden></div>
     </div>

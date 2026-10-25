@@ -522,17 +522,14 @@ function renderAccounts(list, filtered, probe) {
     // 此前这种中间态完全不可见，面板照样打「可用」（issue #215 复盘）。
     else if (s.session_dead_fails > 0) { cls = 'cool'; tag = '<span class="tag warn">疑似登录失效 · 待重登</span>'; }
     else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
-    // 禁用原因分两行：类别+时长（谁来处置、多久了）/ 原始 reason（细节）。
-    // 不分行的话「上游封禁 · 3 天前」和一段长 reason 挤在同一行，扫视时读不出重点。
-    const dk = s.disabled ? disabledKind(s.reason) : null;
-    const dAge = s.disabled ? disabledAge(s.disabled_at) : '';
-    const note = s.reason
-      ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' +
-        (dk ? '<span class="tag ' + dk.tone + '" style="margin-right:6px">' + esc(dk.label) + '</span>' : '') +
-        (dAge ? '<span style="margin-right:6px">' + esc(dAge) + '</span>' : '') +
-        (dk && dk.action ? '<span>' + esc(dk.action) + '</span>' : '') +
-        '<div style="margin-top:2px;opacity:.85">' + esc(s.reason) + '</div></div>'
-      : '';
+    // 状态列只留一个状态标签：详细原因（时间/处置建议/上游原文）放进 title，
+    // 悬停可看，平时不占行高——之前多行详情把这一列撑得很乱（尤其窄屏）。
+    if (s.reason) {
+      const when = s.disabled ? disabledAge(s.disabled_at) : '';
+      const tip = (when ? when + ' · ' : '') + s.reason;
+      tag = tag.replace('<span class="tag', '<span title="' + esc(tip) + '" class="tag');
+    }
+    const note = '';
     const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
     // 企业版不限量：上游 limitNum == -1，网关以 credits_total=-1 透出（见 upstream
@@ -912,11 +909,24 @@ function openMeta(uid, field) {
   metaUID = uid;
   const acc = acctStateOf(uid) || {};
   $('metaWho').textContent = (acc.nickname || '未命名') + ' · ' + String(uid);
-  $('metaGroup').value = String(acc.group == null ? '' : acc.group);
+  // 分组改为下拉选择：候选 = 未分组 + 现有分组（当前值不在列表里也补上）
+  const sel = $('metaGroupSel');
+  if (sel) {
+    const cur = String(acc.group == null ? '' : acc.group);
+    const names = [];
+    (groupsData || []).forEach(g => {
+      const n = String(g.name == null ? '' : g.name);
+      if (n && names.indexOf(n) < 0) names.push(n);
+    });
+    if (cur && names.indexOf(cur) < 0) names.push(cur);
+    sel.innerHTML = '<option value="">未分组</option>' +
+      names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+    sel.value = cur;
+  }
   $('metaNote').value = String(acc.note == null ? '' : acc.note);
   $('metaErr').hidden = true;
   $('metaVeil').classList.add('on');
-  setTimeout(() => (field === 'note' ? $('metaNote') : $('metaGroup')).focus(), 60);
+  setTimeout(() => (field === 'note' ? $('metaNote') : $('metaGroupSel')).focus(), 60);
 }
 
 /* ── 移动到其他分组 ────────────────────────────────────────────────
@@ -1305,7 +1315,7 @@ $('btnMetaSave').onclick = async () => {
     await api('accounts/' + encodeURIComponent(metaUID) + '/meta', {
       method: 'POST',
       body: JSON.stringify({
-        group: ($('metaGroup').value || '').trim(),
+        group: (($('metaGroupSel') || {}).value || '').trim(),
         note: ($('metaNote').value || '').trim(),
       }),
     });
@@ -1320,7 +1330,7 @@ $('btnMetaSave').onclick = async () => {
   } finally { b.disabled = false; }
 };
 // 两个输入回车即保存（弹框里只有两行，没必要再去点按钮）。
-$('metaGroup').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnMetaSave').click(); } });
+if ($('metaGroupSel')) $('metaGroupSel').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnMetaSave').click(); } });
 $('metaNote').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnMetaSave').click(); } });
 
 $('btnCheckinAll').onclick = async () => {
