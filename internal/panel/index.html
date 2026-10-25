@@ -747,9 +747,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
      整表还比容器宽 80px 需要横向滚动。给每列定宽后，User-Agent 吃剩余空间。 */
   /* 列宽按比例固定，但整表有 1100px 下限：十列要放完整的时间/模型/请求 ID，
      900px 装不下（时间、IP、请求 ID 都会被切）。窄窗口就横向滚动，不截断。 */
-  .acc.req { table-layout: fixed; width: 100%; min-width: 1200px; }
-  .acc.req td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .acc.req td .clip { display: inline-block; max-width: 100%; vertical-align: middle; }
+  /* 列宽完全由内容决定，一格都不省略；容器不够宽就横向滚动。
+     不用百分比：百分比会给内容短的列留出多余空白，看起来「结果和模型之间特别宽」。
+     列间距统一由单元格左右内边距决定，两两之间永远等宽。 */
+  .acc.req { table-layout: auto; width: max-content; max-width: none; }
+  .acc.req td { white-space: nowrap; overflow: visible; text-overflow: clip; }
+  /* UA 长度不可控（有的客户端会带一长串注释）：限宽 + 换行，仍然不截断 */
+  .acc.req td.ua { white-space: normal; max-width: 260px; word-break: break-all; }
   /* 徽标是 inline-flex，默认贴在文字基线上，会把行高从 39px 顶到 59px */
   .acc.req td .tag { vertical-align: middle; }
   /* 请求指标是 6 张卡：默认 flex 基准会让第 6 张单独落到第二行、还撑成整行宽，
@@ -1145,7 +1149,7 @@ input::placeholder { color: var(--ink-3); }
 .acc-note:not(:empty)::before { content: '·'; margin: 0 6px 0 2px; color: var(--line); }
 
 /* 状态列给足宽度，reason 不再逐词竖排 */
-.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 156px; }
+#accTable th:nth-child(5), #accTable td:nth-child(5) { min-width: 156px; }
 .acc td { padding: 10px 11px; }
 
 /* 行内操作：3 个常用 + 更多菜单，表格不再被按钮撑爆 */
@@ -1175,7 +1179,7 @@ input::placeholder { color: var(--ink-3); }
 }
 /* 表格宽度微调：整行后仍留出操作列余量 */
 .usage-cell { min-width: 220px; }
-.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 150px; }
+#accTable th:nth-child(5), #accTable td:nth-child(5) { min-width: 150px; }
 
 /* 覆盖旧的分栏规则：所有模块统一整行（旧规则用 nth-child 指定了 span，需要同级覆盖） */
 @media (min-width: 1240px) {
@@ -1246,7 +1250,7 @@ input::placeholder { color: var(--ink-3); }
 
 /* 与原版一致：操作列不吸附，随表格一起横向滚动；取消强制最小宽度，让列自然分配 */
 .acc th.c-acts, .acc td.acts { position: static; box-shadow: none; background: inherit; }
-.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 0; }
+#accTable th:nth-child(5), #accTable td:nth-child(5) { min-width: 0; }
 .usage-cell { min-width: 0; }
 .who { min-width: 0; max-width: 210px; }
 
@@ -1256,15 +1260,15 @@ input::placeholder { color: var(--ink-3); }
 .who { min-width: 0; max-width: 210px; }
 .who .nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .who .nm .grp-badge { flex: none; padding: 0 6px; font-size: 10.5px; line-height: 16px; }
-.acc th:nth-child(4), .acc td:nth-child(4) { min-width: 150px; } /* 状态列 */
+#accTable th:nth-child(4), #accTable td:nth-child(4) { min-width: 150px; } /* 状态列 */
 .usage-cell { min-width: 200px; }
 
 /* 对齐 7865（plus）账号池排版：按钮用自然宽度单排右对齐，列宽比例接近 */
 .who { min-width: 0; max-width: 158px; }
-.acc th:nth-child(4), .acc td:nth-child(4) { min-width: 130px; }  /* 状态 */
-.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 96px; }   /* 积分 */
-.acc th:nth-child(8), .acc td:nth-child(8) { min-width: 232px; }  /* 用量 */
-.acc th:nth-child(9), .acc td:nth-child(9) { min-width: 72px; }   /* 最近成功 */
+#accTable th:nth-child(4), #accTable td:nth-child(4) { min-width: 130px; }  /* 状态 */
+#accTable th:nth-child(5), #accTable td:nth-child(5) { min-width: 96px; }   /* 积分 */
+#accTable th:nth-child(8), #accTable td:nth-child(8) { min-width: 232px; }  /* 用量 */
+#accTable th:nth-child(9), #accTable td:nth-child(9) { min-width: 72px; }   /* 最近成功 */
 .acc th.c-acts, .acc td.acts { width: 1px; white-space: nowrap; }
 .acts-inner {
   display: flex; gap: 4px; justify-content: flex-end; align-items: center;
@@ -1280,7 +1284,7 @@ input::placeholder { color: var(--ink-3); }
 .who { min-width: 0; max-width: 200px; }
 .who .id { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .who .id .grp-badge { flex: none; }
-.acc th:nth-child(8), .acc td:nth-child(8) { min-width: 202px; } /* 用量让出一点宽度 */
+#accTable th:nth-child(8), #accTable td:nth-child(8) { min-width: 202px; } /* 用量让出一点宽度 */
 
 /* 窄屏：账号表改成卡片式，名称/状态/指标/按钮分行，避免挤成一条 */
 @media (max-width: 760px) {
@@ -1326,8 +1330,8 @@ input::placeholder { color: var(--ink-3); }
 /* 桌面列宽最终配比：一排 7 个按钮 + 完整数据列，总宽 1158 不横滚 */
 .who { max-width: 170px; }
 .who .nm { white-space: normal; word-break: break-word; line-height: 1.35; }
-.acc th:nth-child(4), .acc td:nth-child(4) { min-width: 136px; }  /* 状态 */
-.acc th:nth-child(8), .acc td:nth-child(8) { min-width: 178px; }  /* 用量 */
+#accTable th:nth-child(4), #accTable td:nth-child(4) { min-width: 136px; }  /* 状态 */
+#accTable th:nth-child(8), #accTable td:nth-child(8) { min-width: 178px; }  /* 用量 */
 .acc th.c-acts, .acc td.acts { width: auto; }
 .acts-inner { gap: 3px; }
 .acts-inner button { padding: 0 8px; font-size: 11.5px; }
@@ -2173,11 +2177,6 @@ input::placeholder { color: var(--ink-3); }
         </div>
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
-            <colgroup>
-              <col style="width:8%"><col style="width:13%"><col style="width:16%"><col style="width:8%">
-              <col style="width:11%"><col style="width:12%">
-              <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:15%">
-            </colgroup>
             <thead><tr>
               <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
               <th>来源 IP</th><th>User-Agent</th>
@@ -2198,10 +2197,6 @@ input::placeholder { color: var(--ink-3); }
         </header>
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
-            <colgroup>
-              <col style="width:12%"><col style="width:14%"><col style="width:9%"><col style="width:14%">
-              <col style="width:6%"><col style="width:15%"><col style="width:15%"><col style="width:15%">
-            </colgroup>
             <thead><tr>
               <th>账号</th><th>类型</th><th>上游码</th><th>模型</th>
               <th class="num">次数</th><th>最近</th><th>解除时刻</th><th>样本</th>

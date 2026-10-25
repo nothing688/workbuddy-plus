@@ -2176,12 +2176,12 @@ function renderRequestTable() {
       '<td>' + reqOutcomeTag(e) + '</td>' +
       '<td title="' + esc(e && e.model || '') + '">' + esc(e && e.model || '—') + '</td>' +
       '<td title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</td>' +
-      '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td class="mono">' + (ip ? esc(ip) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="mono ua">' + (ua ? esc(ua) : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
       '<td class="num">' + reqTokenCell(e) + '</td>' +
       '<td class="num">' + reqCreditCell(e) + '</td>' +
-      '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td class="mono">' + (rid ? esc(rid) : '<span class="muted">—</span>') + '</td>' +
       '</tr>';
   }).join('') || '<tr><td colspan="10" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
