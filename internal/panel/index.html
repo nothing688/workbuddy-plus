@@ -857,11 +857,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>账号池</h3>
           <span class="grow"></span>
           <span class="note" id="accNote"></span>
-          <span class="note" id="accGroupCounts"></span>
-          <label class="sel-note" title="按分组筛选账号池；计数为该分组的账号数 / 可用数">分组
-            <select id="accGroupFilter"><option value="__all__">全部分组</option></select>
-          </label>
-          <button class="xs" id="btnProbeAll" title="逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测">全部测试</button>
           <button class="xs" id="btnCheckinAll">全部签到</button>
           <button class="xs" id="btnTravelAll">旅行巡检</button>
           <button class="xs" id="btnActivityAll">活跃上报</button>
@@ -872,12 +867,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="pool-active">
           <span class="lbl">当前调用池</span>
           <span class="grp-badge none" id="poolActiveBadge" title="当前调用池：全池">全池</span>
-          <span class="hint">不带分组参数的请求走这里</span>
-          <span class="grow"></span>
-          <label class="sel-note" title="选择要切到的分组；选择本身不会生效，需点「切换」">切换为
-            <select id="poolActiveSelect"><option value="__all__">全池</option></select>
+          <label class="sel-note" title="选择分组：立即按该组筛选账号；点「切换」才把它设为默认调用池">分组
+            <select id="poolActiveSelect"><option value="__all__">全部分组</option></select>
           </label>
-          <button class="xs primary" id="btnPoolActive" title="选好分组后点此切换（下拉本身不会生效）">切换</button>
+          <span class="note" id="accGroupCounts"></span>
+          <button class="xs primary" id="btnPoolActive" title="选好分组后点此切换为默认调用池（下拉本身只改查看范围）">切换</button>
+          <button class="xs" id="btnProbeAll" title="逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测">全部测试</button>
+          <span class="hint">不带分组参数的请求走当前调用池</span>
+          <span class="grow"></span>
           <!-- 多选工具条：无勾选时整块 hidden；全选只作用于当前筛选范围 -->
           <span class="acc-selbar" id="accSelBar" hidden>
             <span class="cnt" id="accSelCount">已选 0 个</span>

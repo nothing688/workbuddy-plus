@@ -737,22 +737,38 @@ function renderPoolActive() {
       ? '当前调用池：' + activePool + '（不带分组参数的请求走该组）'
       : '当前调用池：全池（不带分组参数的请求可在任意分组选号）';
   }
+  // 下拉与「分组筛选」已合并：选项反映当前**查看**范围（accGroupFilter），
+  // 徽章反映当前**调用**池（activePool）。两者可以不同——选了组不点「切换」就只筛选。
+  renderGroupSelect();
+}
+
+// renderGroupSelect 画合并后的分组下拉：选项来自 /groups 计数，值来自查看范围。
+// 同一份候选也喂给导入页与 meta 弹框的 datalist。
+function renderGroupSelect() {
   const sel = $('poolActiveSelect');
   if (!sel) return;
   const opt = (v, text) => '<option value="' + esc(v) + '">' + esc(text) + '</option>';
-  const names = [];
-  for (const g of poolGroups) {
-    const name = String(g.name == null ? '' : g.name);
-    // 空名 = 未分组，不能作为调用池（后端空串表示全池），故不列。
-    if (name && names.indexOf(name) < 0) names.push(name);
+  const total = groupsData.reduce((a, g) => a + (g.total || 0), 0);
+  const healthy = groupsData.reduce((a, g) => a + (g.healthy || 0), 0);
+  const has = accGroupFilter == null || groupsData.some(g => String(g.name == null ? '' : g.name) === accGroupFilter);
+  const missing = accGroupFilter != null && accGroupFilter !== '' && !has;
+  const html = opt('__all__', '全部分组（' + total + ' 个 · ' + healthy + ' 可用）') +
+    groupsData.map(g => {
+      const name = String(g.name == null ? '' : g.name);
+      return opt(name === '' ? '__none__' : name,
+        (name || '未分组') + '（' + (g.total || 0) + ' 个 · ' + (g.healthy || 0) + ' 可用）');
+    }).join('') +
+    (missing ? opt(accGroupFilter, accGroupFilter + '（0 个 · 0 可用）') : '');
+  // 选项没变就不重建：5s 轮询重建会把用户正展开的下拉收起来。
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+  const want = accGroupFilter == null ? '__all__' : (accGroupFilter === '' ? '__none__' : accGroupFilter);
+  if (sel.value !== want) sel.value = want;
+  if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
+  if ($('metaGroupList')) {
+    $('metaGroupList').innerHTML = groupsData
+      .filter(g => g.name)
+      .map(g => '<option value="' + esc(g.name) + '"></option>').join('');
   }
-  // 当前池可能还没账号（GroupCounts 不会出现它），补一项，否则下拉显示不出当前值。
-  if (activePool && names.indexOf(activePool) < 0) names.push(activePool);
-  sel.innerHTML = opt('__all__', '全池') + names.map(name => {
-    const g = poolGroups.find(x => String(x.name == null ? '' : x.name) === name);
-    return opt(name, name + (g ? '（' + (g.total || 0) + ' 个 · ' + (g.healthy || 0) + ' 可用）' : '（无账号）'));
-  }).join('');
-  sel.value = activePool ? activePool : '__all__';
 }
 
 // groupCountText 当前选中分组的 total/healthy；下拉收起后这行仍在，不用展开才知道人数。
@@ -765,34 +781,7 @@ function groupCountText() {
 
 // renderGroupFilter 用 /groups 的计数重建下拉。空名 = 未分组，但它的 value 不能也是空串
 // （会和「全部」撞车），故用 __all__ / __none__ 两个哨兵，切换时再翻译回 null / ''。
-function renderGroupFilter() {
-  const sel = $('accGroupFilter');
-  if (!sel) return;
-  const has = accGroupFilter == null || groupsData.some(g => String(g.name == null ? '' : g.name) === accGroupFilter);
-  // 未分组不存在时才回落「全部」；非空分组名即使暂时没账号也保留选中（可能是刚切到
-  // 的调用池），并补一个 0 计数的选项，否则「筛选自动跟到该池」会被下一轮刷新冲掉。
-  if (!has && (accGroupFilter == null || accGroupFilter === '')) accGroupFilter = null;
-  const missing = accGroupFilter != null && accGroupFilter !== '' && !has;
-  const total = groupsData.reduce((a, g) => a + (g.total || 0), 0);
-  const healthy = groupsData.reduce((a, g) => a + (g.healthy || 0), 0);
-  const opt = (v, label) => '<option value="' + esc(v) + '">' + esc(label) + '</option>';
-  sel.innerHTML =
-    opt('__all__', '全部分组（' + total + ' 个 · ' + healthy + ' 可用）') +
-    groupsData.map(g => {
-      const name = String(g.name == null ? '' : g.name);
-      return opt(name === '' ? '__none__' : name,
-        (name || '未分组') + '（' + (g.total || 0) + ' 个 · ' + (g.healthy || 0) + ' 可用）');
-    }).join('') +
-    (missing ? opt(accGroupFilter, accGroupFilter + '（0 个 · 0 可用）') : '');
-  sel.value = accGroupFilter == null ? '__all__' : (accGroupFilter === '' ? '__none__' : accGroupFilter);
-  if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
-  // 下拉与导入页共用同一份分组名候选（datalist 只在输入时弹提示，不限制自由填写）。
-  if ($('metaGroupList')) {
-    $('metaGroupList').innerHTML = groupsData
-      .filter(g => g.name)
-      .map(g => '<option value="' + esc(g.name) + '"></option>').join('');
-  }
-}
+function renderGroupFilter() { renderGroupSelect(); }
 
 // runProbeChat 可用性测试：向上游发一次极小对话。结果存 probeResult（按 uid），
 // 行内展示；测试只读，不刷新 overview（池状态没有任何变化）。
@@ -1205,9 +1194,10 @@ if ($('accSelAll')) {
 if ($('btnAccMove')) $('btnAccMove').onclick = () => openGroupPicker(null, true);
 if ($('btnAccSelClear')) $('btnAccSelClear').onclick = () => { accSel.clear(); paintAccounts(); };
 
-/* ── 分组筛选 / 分组备注 ──────────────────────────────────────────── */
-$('accGroupFilter').onchange = () => {
-  const v = $('accGroupFilter').value;
+/* ── 分组选择（合并了筛选与切换目标）────────────────────────────────
+   下拉只改**查看范围**；要改线上路由必须点「切换」。 */
+if ($('poolActiveSelect')) $('poolActiveSelect').onchange = () => {
+  const v = $('poolActiveSelect').value;
   // 哨兵翻回内部表示：'__all__' = 不筛，'__none__' = 空分组名（未分组）。
   accGroupFilter = v === '__all__' ? null : (v === '__none__' ? '' : v);
   // 换范围即清空选择：上一个分组里勾的号在眼前已经看不见，留着会被误批量改。
@@ -1248,7 +1238,7 @@ $('btnPoolActive').onclick = async () => {
     toast('切换调用池失败：' + e.message, 'err');
   } finally {
     b.disabled = false;
-    b.title = '选好分组后点此切换（下拉本身不会生效）';
+    b.title = '选好分组后点此切换为默认调用池（下拉本身只改查看范围）';
   }
 };
 
