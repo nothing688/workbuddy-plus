@@ -754,6 +754,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .acc.req td { white-space: nowrap; overflow: visible; text-overflow: clip; }
   /* UA 长度不可控（有的客户端会带一长串注释）：限宽 + 换行，仍然不截断 */
   .acc.req td.ua { white-space: normal; max-width: 260px; word-break: break-all; }
+  /* 账号列封顶 200px：uid 不必整串铺开，超长直接省略（悬停看全）；模型列不设上限，
+     保证 `cn:deepseek-v4.1-flash` 这种长名字永远单行显示。 */
+  .acc.req td.uid { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
   /* 徽标是 inline-flex，默认贴在文字基线上，会把行高从 39px 顶到 59px */
   .acc.req td .tag { vertical-align: middle; }
   /* 请求指标是 6 张卡：默认 flex 基准会让第 6 张单独落到第二行、还撑成整行宽，

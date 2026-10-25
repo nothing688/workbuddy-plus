@@ -2175,7 +2175,7 @@ function renderRequestTable() {
       '<td class="num">' + esc(when) + '</td>' +
       '<td>' + reqOutcomeTag(e) + '</td>' +
       '<td title="' + esc(e && e.model || '') + '">' + esc(e && e.model || '—') + '</td>' +
-      '<td title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</td>' +
+      '<td class="uid" title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</td>' +
       '<td class="mono">' + (ip ? esc(ip) : '<span class="muted">—</span>') + '</td>' +
       '<td class="mono ua">' + (ua ? esc(ua) : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
