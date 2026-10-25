@@ -24,4 +24,13 @@
     ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
     : saved;
   document.documentElement.setAttribute('data-theme', eff);
+
+  // 字体模式同理：早于样式表解析写入 data-font，避免「先按内嵌字体画一帧、再跳成系统字体」。
+  var font = '';
+  try {
+    font = localStorage.getItem('wb2api.font') || '';
+  } catch (e) {
+    /* 同上 */
+  }
+  if (font) document.documentElement.setAttribute('data-font', font);
 })();

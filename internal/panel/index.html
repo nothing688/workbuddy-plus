@@ -53,6 +53,15 @@
   --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
   --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
 }
+/* 字体切换（顶栏 Aa 按钮循环）：默认内嵌文泉驿，另两种是系统字体与全站等宽。 */
+html[data-font="system"] {
+  --sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --mono: "Cascadia Mono", ui-monospace, "SF Mono", Consolas, "Sarasa Mono SC", "DejaVu Sans Mono", monospace;
+}
+html[data-font="mono"] {
+  /* 中文仍用正黑（等宽子集只有 ASCII），西文/数字全部等宽 */
+  --sans: "WQY Mono", "WQY Sans", "Cascadia Mono", ui-monospace, monospace;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
@@ -1426,6 +1435,9 @@ input::placeholder { color: var(--ink-3); }
       <div class="grow"></div>
       <button class="icon ghost" id="btnTheme" title="切换明暗（跟随系统 → 浅色 → 深色）" aria-label="切换主题">
         <svg id="icoTheme" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
+      </button>
+      <button class="icon ghost" id="btnFont" title="字体：内嵌文泉驿（点击切换）" aria-label="切换字体">
+        <span style="font:600 12px/1 var(--sans); letter-spacing:.02em">Aa</span>
       </button>
       <button class="icon ghost" id="btnRefresh" title="刷新" aria-label="刷新">
         <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3"/></svg>

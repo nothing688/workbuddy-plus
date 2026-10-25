@@ -56,6 +56,30 @@ function applyTheme() {
     : '<path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/>';
   $('btnTheme').title = eff === 'light' ? '切换到深色' : '切换到浅色';
 }
+
+/* ── 字体切换 ───────────────────────────────────────────────────────
+   三档循环：内嵌文泉驿（默认，各平台一致）/ 系统字体（雅黑 UI、苹方…）/ 全站等宽。
+   只改 <html data-font>，具体字体由 CSS 变量覆盖；选择存 localStorage，theme.js 会在
+   样式表之前把它写回去，刷新不会先闪一帧默认字体。 */
+const FONT_MODES = [['', '内嵌文泉驿'], ['system', '系统字体'], ['mono', '等宽']];
+let fontMode = '';
+
+function applyFont(mode) {
+  fontMode = mode || '';
+  if (fontMode) document.documentElement.dataset.font = fontMode;
+  else delete document.documentElement.dataset.font;
+  localStorage.setItem('wb2api.font', fontMode);
+  const label = (FONT_MODES.find(f => f[0] === fontMode) || FONT_MODES[0])[1];
+  const btn = $('btnFont');
+  if (btn) btn.title = '字体：' + label + '（点击切换）';
+}
+
+$('btnFont').onclick = () => {
+  const i = FONT_MODES.findIndex(f => f[0] === fontMode);
+  applyFont(FONT_MODES[(i + 1) % FONT_MODES.length][0]);
+  toast('字体：' + (FONT_MODES.find(f => f[0] === fontMode) || FONT_MODES[0])[1], 'ok');
+};
+applyFont(localStorage.getItem('wb2api.font') || '');
 addEventListener('change', applyTheme);
 $('btnTheme').onclick = () => {
   theme = effTheme() === 'light' ? 'dark' : 'light';
@@ -2041,10 +2065,10 @@ function renderRequestMetrics(m, entries) {
     usStat(m.success_rate == null ? '—' : Number(m.success_rate).toFixed(1) + '%', '完成成功率') +
     usStat(m.http_success_rate == null ? '—' : Number(m.http_success_rate).toFixed(1) + '%', 'HTTP 成功率') +
     usStat(fmtMs(m.avg_duration_ms), '平均耗时') +
-    usStat(String(m.in_flight || 0), '进行中') +
-    usStat(fmtTok(a.files), '归档文件');
+    usStat(String(m.in_flight || 0), '进行中');
   $('reqNote').textContent = a.enabled
-    ? 'JSONL 归档 ' + fmtBytes(a.bytes) + (a.dropped_writes ? ' · 丢弃 ' + a.dropped_writes + ' 条' : '') +
+    ? 'JSONL 归档 ' + fmtBytes(a.bytes) + (a.files ? ' · ' + fmtTok(a.files) + ' 个文件' : '') +
+      (a.dropped_writes ? ' · 丢弃 ' + a.dropped_writes + ' 条' : '') +
       (a.last_error ? ' · 错误：' + a.last_error : '')
     : '仅内存指标，JSONL 归档已关闭';
 
