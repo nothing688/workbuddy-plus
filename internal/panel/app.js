@@ -1662,10 +1662,19 @@ async function loadModels(force) {
     const [d, pr, st, rm] = await Promise.all([
       api('models' + (force ? '?refresh=1' : '')),
       api('model_probes').catch(() => ({})),
-      api('status').catch(() => ({})),
+      // model_locks 挂在 overview 上；曾经写 api('status')，那个路由根本不存在，
+      // 每次进模型页都吃一个 404，锁态标签也永远是空的。
+      api('overview').catch(() => ({})),
       api('request_metrics').catch(() => ({})),
     ]);
     mdAll = d.models || [];
+    // 目录不完整的原因（没有可用账号 / 上游报错）：显示在表头上方，别让用户以为
+    // 「上游只有两条出图模型」。
+    const warns = (Array.isArray(d.warnings) ? d.warnings : []).filter(Boolean);
+    if ($('mdWarn')) {
+      $('mdWarn').hidden = warns.length === 0;
+      $('mdWarn').textContent = warns.join('；');
+    }
     mdProbes = pr.probes || {};
     mdLocks = Array.isArray(st.model_locks) ? st.model_locks : [];
     mdRecent = Array.isArray(rm.recent) ? rm.recent : [];
@@ -1686,8 +1695,15 @@ async function loadModels(force) {
     renderModels();
   } catch (e) {
     mdAll = [];
-    tb.innerHTML = '<tr><td colspan="7"><div class="empty">' + esc(e.message) + '</div></td></tr>';
+    // 模型清单是拿池里的可用账号去上游实时拉的（/panel/api/models 直连上游）。
+    // 池里没号/全被禁时拉不到，只说「fetch models: ...」没人看得懂，直接给结论。
+    const noAccount = /没有可用账号/.test(e.message || '');
+    tb.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="big">' +
+      (noAccount ? '拿不到模型目录：池里没有可用账号' : '拿不到模型目录') + '</div>' +
+      (noAccount ? '模型清单要用可用账号向上游实时查询。先把账号解封 / 添加可用的号，再点右上角「重新获取」。' : esc(e.message)) +
+      '</div></td></tr>';
     $('mdCount').textContent = '';
+    if ($('mdWarn')) { $('mdWarn').hidden = false; $('mdWarn').textContent = noAccount ? '没有可用账号，无法拉取上游模型目录' : '拉取模型目录失败：' + e.message; }
   }
 }
 

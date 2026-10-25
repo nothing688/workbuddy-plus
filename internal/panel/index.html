@@ -468,6 +468,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 }
 .state { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .state.ok { color: var(--ok); } .state.err { color: var(--bad); }
+.md-warn {
+  margin: 12px 18px 0; padding: 8px 11px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+}
 .dots::after { content: "…"; animation: blink 1.2s steps(4) infinite; }
 @keyframes blink { 0% { opacity: 1; } 50% { opacity: .3; } 100% { opacity: 1; } }
 
@@ -1514,6 +1519,9 @@ input::placeholder { color: var(--ink-3); }
           <span class="note" id="mdNote">实时查询上游</span>
           <button class="xs" id="btnModels">重新获取</button>
         </header>
+        <!-- 目录拉取不完整的原因（没有可用账号 / 上游报错）：不解释的话用户只会看到
+             两条内置出图模型，以为上游就这么多。 -->
+        <div class="md-warn" id="mdWarn" hidden></div>
         <div class="fbar" id="mdFilter">
           <input id="mdQ" type="search" placeholder="搜索模型 ID / 名称 / 描述 / 厂商" aria-label="搜索模型">
           <select id="mdRealm" aria-label="按域筛选">

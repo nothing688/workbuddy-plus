@@ -665,6 +665,15 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 没有可用账号时根本没发请求，也就没有 fetchErr —— 显式补一条。否则界面只剩
+	// 内置出图模型（2 条），用户会以为「上游就这么多模型」，看不出是拉不到对话目录。
+	if len(p.cfg.Pool.AvailableUIDsForRealm("cn")) == 0 {
+		fetchErrs = append(fetchErrs, "cn：没有可用账号，拉不到对话模型目录")
+	}
+	if p.cfg.Upstream.GlobalEnabled && len(p.cfg.Pool.AvailableUIDsForRealm("global")) == 0 {
+		fetchErrs = append(fetchErrs, "global：没有可用账号，拉不到对话模型目录")
+	}
+
 	if len(out) == 0 {
 		if len(fetchErrs) > 0 {
 			writeErr(w, http.StatusBadGateway, "fetch models: "+strings.Join(fetchErrs, "; "))
@@ -680,6 +689,9 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		// 前端据此提示「拿到的是回落/降级目录」——issue #216 里用户只看到「少了 11 个模型」，
 		// 完全不知道已经降级到企业端点（那份目录只有 18 条、hy4-preview 的倍率还是旧值）。
 		"global_source": p.cfg.Upstream.GlobalCatalogSource(),
+		// warnings 目录拉取过程中的问题（无可用账号 / 上游报错 / 繁忙度查询失败）。
+		// 非致命：出图模型始终有内置清单，面板照常显示，但要把「少」的原因说清楚。
+		"warnings": fetchErrs,
 	})
 }
 
