@@ -18,6 +18,8 @@ const probeBusy = Object.create(null), probeResult = Object.create(null);
    勾选状态必须活在 DOM 之外才能在重绘后按住 uid 恢复；切换分组筛选 / 切换调用池
    时清空，避免把上一个范围里的号一起批量改。 */
 const accSel = new Set();
+// selMode 为 true 时才显示勾选列（默认隐藏，避免平时多占一列）。
+let selMode = false;
 /* 「全部测试」运行中标记：模块级，切页 / 5s 轮询都不会清它；重复点击靠它兜住。 */
 let probeAllRunning = false;
 let logPin = true, loginState = null, loginTimer = null;
@@ -664,7 +666,8 @@ function syncAccSelBar() {
   const bar = $('accSelBar');
   if (!bar) return;
   const n = typeof accSel === 'undefined' ? 0 : accSel.size;
-  bar.hidden = n === 0;
+  // 非多选模式下不显示工具条：勾选列本身也隐藏，避免平时占位。
+  bar.hidden = !selMode || n === 0;
   const cnt = $('accSelCount');
   if (cnt) cnt.textContent = '已选 ' + n + ' 个';
   const mv = $('btnAccMove');
@@ -1193,6 +1196,17 @@ if ($('accSelAll')) {
 }
 if ($('btnAccMove')) $('btnAccMove').onclick = () => openGroupPicker(null, true);
 if ($('btnAccSelClear')) $('btnAccSelClear').onclick = () => { accSel.clear(); paintAccounts(); };
+// 多选开关：勾选列默认隐藏，点「多选」才出现；退出时清空选择，避免残留。
+if ($('btnSelMode')) $('btnSelMode').onclick = () => {
+  selMode = !selMode;
+  const tbl = $('accBody') && $('accBody').closest('table');
+  if (tbl) tbl.classList.toggle('sel-mode', selMode);
+  if (!selMode) accSel.clear();
+  const b = $('btnSelMode');
+  b.textContent = selMode ? '退出多选' : '多选';
+  b.classList.toggle('primary', selMode);
+  paintAccounts();
+};
 
 /* ── 导出账号 ──────────────────────────────────────────────────────
    与导入同构（account + auth + group/note），导出后可原样再导入。
