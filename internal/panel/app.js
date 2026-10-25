@@ -451,6 +451,9 @@ $('btnKey').onclick = async () => {
   } catch (e) { $('keyErr').hidden = false; }
 };
 $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnKey').click(); });
+// 回车由上面的 keydown 处理；表单自身的提交要挡掉，否则会整页刷新。
+// 之前写在 HTML 的 onsubmit 上，被 CSP（script-src 'self'）拦下，回车等于刷新页面。
+$('keyForm').addEventListener('submit', e => e.preventDefault());
 
 // 登出：api_key 是唯一凭据（服务端只做 VerifyBearer 比对，无会话无 cookie 可失效），
 // 所以"登出"= 清掉本机保存的密钥并重载——重载把内存里的定时器与已渲染数据一并清空，
