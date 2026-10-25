@@ -95,11 +95,7 @@ async function api(path, opts = {}) {
 /* ── 侧栏收起（桌面图标模式）────────────────────────────────────────
    状态存 localStorage：刷新后保持上次选择。窄屏不看这个开关（移动端用抽屉）。 */
 try {
-  // 默认在宽屏收成图标栏（更多横向空间给数据表）；用户手动展开后记住选择。
-  const pref = localStorage.getItem('wb2api.navRail');
-  const wide = typeof window !== 'undefined' && window.innerWidth >= 1200;
-  const wantRail = pref == null ? wide : pref === '1';
-  if (wantRail && typeof document.querySelector === 'function') {
+  if (localStorage.getItem('wb2api.navRail') === '1' && typeof document.querySelector === 'function') {
     const shell = document.querySelector('.shell');
     if (shell) shell.classList.add('rail');
   }

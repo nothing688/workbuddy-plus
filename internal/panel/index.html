@@ -1137,82 +1137,6 @@ input::placeholder { color: var(--ink-3); }
 @media (min-width: 1240px) {
   #view-balhist > .box:nth-child(2) > header h3 .hint { display: none; }
 }
-
-/* ═══ 布局 4.0：图标栏 + 指标带 + 主表 + 4/8 分区 ═══════════════════ */
-
-/* ① 顶栏主按钮不再被 .topbar .icon 的透明样式覆盖 */
-.topbar .icon.primary {
-  background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
-  box-shadow: 0 6px 16px -10px var(--accent);
-}
-.topbar .icon.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #fff); border-color: var(--accent); }
-
-/* ② 账号页统计：从「一排卡片」改成「一条指标带」 */
-#view-accounts .stats {
-  /* 首卡占两格 → 7 项共 8 格，一条带排满一行 */
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 0; padding: 6px; border: 1px solid var(--line);
-  border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-1);
-  overflow: hidden;
-}
-#view-accounts .stat {
-  border: 0; border-right: 1px solid var(--line-soft); border-radius: 10px;
-  background: transparent; box-shadow: none; padding: 9px 14px;
-}
-#view-accounts .stat:last-child { border-right: 0; }
-#view-accounts .stat .v { font-size: 21px; }
-#view-accounts .stat:first-child {
-  background: linear-gradient(135deg, var(--accent-soft), transparent 85%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-#view-accounts .stat:first-child .v { font-size: 26px; }
-
-/* ③ 大区域：主表整行 + 底部 4/8 并排 */
-@media (min-width: 1240px) {
-  #view-accounts > .box:nth-child(2) { order: 2; grid-column: span 4; }
-  #view-accounts > .box:nth-child(4) { order: 3; grid-column: span 8; }
-}
-
-/* ④ 主表去卡片化：贴边的大平面，头部变成一条工具栏带 */
-#view-accounts > .box:nth-child(3) {
-  border-radius: 14px; border-color: var(--line);
-  background: var(--surface);
-}
-#view-accounts > .box:nth-child(3) > header {
-  background: var(--surface-2); border-bottom: 1px solid var(--line);
-}
-
-/* ⑤ 桌面默认更窄的图标栏下，正文字号略收紧 */
-@media (min-width: 1240px) {
-  .shell.rail .view { padding-left: 30px; padding-right: 30px; }
-}
-
-/* 图标栏模式下选中态用底色，不再在窗口最左侧画一条悬空的色条 */
-.shell.rail .nav a.on::before { display: none; }
-.shell.rail .nav a.on {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-/* 窄栏卡片标题允许换行，长说明不再被裁掉 */
-#view-accounts > .box:nth-child(2) > header h3 { white-space: normal; }
-
-/* 移动端：指标带退回两列卡片，避免文字被压成竖排 */
-@media (max-width: 760px) {
-  #view-accounts .stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
-    padding: 0; border: 0; background: transparent; box-shadow: none; overflow: visible;
-  }
-  #view-accounts .stat {
-    border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
-    padding: 11px 13px;
-  }
-  #view-accounts .stat:nth-child(2n) { border-right: 1px solid var(--line); }
-  #view-accounts .stat:first-child { grid-column: span 2; }
-  #view-accounts .stat:first-child .v { font-size: 24px; }
-  /* 顶栏单行，避免「+」被挤到第二行孤单一个 */
-  .topbar { flex-wrap: nowrap; overflow: hidden; }
-  .topbar h2, .topbar .sep, .topbar .meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-}
 </style>
 </head>
 <body>
@@ -1294,7 +1218,7 @@ input::placeholder { color: var(--ink-3); }
         <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
         <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分剩余 / 总额</div></div>
+        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分剩余（不含禁用）/ 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
       </div>
 
