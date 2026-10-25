@@ -1,4 +1,4 @@
 # 上游基线：name <TAB> repo <TAB> 快照目录 <TAB> 快照对应的上游 commit
 # scripts/sync_upstream.sh 读取本文件做三方合并；--apply 成功后会就地更新最后一列。
-panel	https://github.com/misakano7545/workbuddy2api-panel	workbuddy2api-panel	f9d190cb78a54400803cf3bf06f91d044a04e52d
+panel	https://github.com/misakano7545/workbuddy2api-panel	workbuddy2api-panel	d30f7fd1bb5e6b4b6fa0698cf203af8adec493e5
 plus	https://github.com/JACKY199503/workbuddy2api-panel-plus	workbuddy2api-panel-plus	07c097dfbdbc6f1c440b59ad1bad996dd6b4ae27
