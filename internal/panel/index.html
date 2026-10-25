@@ -368,17 +368,35 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 /* 移动分组弹框：候选组做成一行行可点的胶囊，避免再手打组名 */
 .grp-picks { display: flex; flex-wrap: wrap; gap: 8px; }
 .grp-pick { padding: 4px 12px; border-radius: 999px; }
-/* 测试结果行：挂在账号行下方整行展开，reply 用 <details> 收着，不挤占表格列宽。 */
-.acc tr.probe-row td { padding: 0 11px 10px 15px; background: transparent; }
-.probe-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; }
-.probe-line.bad { color: var(--bad); }
-.probe-line .probe-model { color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; }
-.probe-reply { min-width: 0; max-width: 100%; color: var(--ink-2); }
-.probe-reply summary { cursor: pointer; color: var(--ink-3); font-size: 11.5px; }
-.probe-reply .body {
-  margin-top: 4px; padding: 6px 9px; border-radius: 6px; max-height: 160px; overflow: auto;
-  background: var(--surface-2); border: 1px solid var(--line-soft);
-  font: 11.5px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word;
+/* 测试结果浮窗：固定在右下角，不再往表格里插整行（多行错误会把行高撑开、
+   把后面的行整体推开）。条目超出高度自己滚，点右上角关闭才收起。 */
+#probeFloat {
+  position: fixed; right: 20px; bottom: 84px; z-index: 92;
+  width: min(400px, calc(100vw - 32px)); max-height: min(56vh, 480px);
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-2);
+  animation: pfIn .16s ease-out;
+}
+@keyframes pfIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.pf-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--line-soft); }
+.pf-head b { font-size: 12.5px; font-weight: 620; }
+.pf-head .pf-sub { font-size: 11.5px; color: var(--ink-3); }
+.pf-close { margin-left: auto; flex: none; }
+.pf-body { overflow: auto; padding: 4px 6px 8px; }
+.pf-item { padding: 8px 8px 9px; border-bottom: 1px dashed var(--line-soft); font-size: 12px; }
+.pf-item:last-child { border-bottom: none; }
+.pf-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pf-who { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.pf-meta { margin-left: 6px; color: var(--ink-3); font: 11px var(--mono); font-weight: 400; }
+.pf-err, .pf-reply {
+  margin-top: 4px; word-break: break-word;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+.pf-err { color: var(--bad); }
+.pf-reply { color: var(--ink-2); }
+@media (max-width: 760px) {
+  #probeFloat { left: 12px; right: 12px; bottom: 74px; width: auto; max-height: 46vh; }
 }
 
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
@@ -868,7 +886,16 @@ body {
   transition: border-color .16s, transform .16s;
 }
 .stat:hover, .stats .st:hover { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); }
-.stat .v, .stats .st .v { font-size: 23px; font-weight: 650; letter-spacing: -.02em; }
+/* 数值必须在卡片里：网格轨道允许收缩（min-width:0），长数字（剩下的 / 总额）按
+   斜杠分两段、放不下时折行。Windows 的 Consolas 比容器里的字体宽，之前会顶出卡片。 */
+.stat, .stats .st { min-width: 0; }
+.stat .v, .stats .st .v {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 5px; min-width: 0;
+  font-size: clamp(19px, 1.35vw, 23px); font-weight: 650; letter-spacing: -.02em;
+}
+.stat .v .of, .stats .st .v .of {
+  font-size: .66em; font-weight: 600; color: var(--ink-3); letter-spacing: -.01em;
+}
 .stat .k, .stats .st .k { font-size: 11.5px; margin-top: 6px; color: var(--ink-3); }
 
 /* ── 面板块：更软的圆角与头部层次 ───────────────────────────────── */
@@ -1195,11 +1222,6 @@ input::placeholder { color: var(--ink-3); }
     content: attr(data-label); display: block; margin-bottom: 2px;
     font-size: 10.5px; color: var(--ink-3); font-weight: 500;
   }
-  /* 测试结果行：跟随卡片，不加边框 */
-  #view-accounts table.acc tr.probe-row {
-    display: block; border: 0; background: transparent; padding: 0 4px;
-  }
-  #view-accounts table.acc tr.probe-row td { display: block; }
 }
 
 /* 窄屏操作按钮：横向换行排列（覆盖桌面端的固定槽位/网格规则） */
@@ -1317,7 +1339,7 @@ input::placeholder { color: var(--ink-3); }
         <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
         <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分剩余（不含禁用）/ 总额</div></div>
+        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分 剩余 / 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
       </div>
 
@@ -2263,10 +2285,10 @@ input::placeholder { color: var(--ink-3); }
       </div>
       <!-- 导入 JSON -->
       <div id="addTabImport" class="tab-panel" hidden>
-        <div class="hint" style="margin-bottom:8px">选择 JSON 文件批量导入账号。支持三种结构：账号数组、单个账号对象、<code>{"accounts":[...]}</code> 包裹；必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选。兼容常见别名字段（<code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等），过期时间戳秒或毫秒均可。</div>
+        <div class="hint" style="margin-bottom:8px">可一次选多个 JSON 文件，每个文件可以是：账号数组、单个账号对象、<code>{"accounts":[...]}</code> / <code>{"data":{"accounts":[...]}}</code> 包裹、JSONL（每行一个账号）或 access_token 字符串数组。必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选；兼容 <code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等别名，过期时间戳秒或毫秒均可。</div>
         <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
         <datalist id="metaGroupList"></datalist>
-        <input type="file" id="importFile" accept=".json" style="margin-bottom:8px">
+        <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
         <div id="importDone" class="state ok" hidden></div>
         <div id="importErr" class="state err" hidden></div>
       </div>
@@ -2301,6 +2323,8 @@ input::placeholder { color: var(--ink-3); }
 </div>
 
 <div id="toasts"></div>
+<!-- 可用性测试结果浮窗：由 app.js 的 renderProbeFloat 填充，不占表格行高。 -->
+<div id="probeFloat" hidden></div>
 
 <!-- 账号名称备注与分组：写回后端（POST /accounts/{uid}/meta）。
      名称备注就是「账号备注」——显示在账号名前面替代原昵称，不单独占一列。 -->

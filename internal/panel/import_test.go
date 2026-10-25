@@ -302,3 +302,130 @@ func TestImportNestedAccountAuth(t *testing.T) {
 		t.Fatalf("expires=%d", a.ExpiresAt)
 	}
 }
+
+// TestImportTwoLevelWrapper 两层包裹 {"data":{"accounts":[...]}}，以及三层包裹。
+func TestImportTwoLevelWrapper(t *testing.T) {
+	e := newImportTestEnv(t)
+	e.mustImport(t, `{"code":0,"data":{"total":2,"accounts":[
+		{"uid":"tw1","access_token":"at-tw1"},
+		{"account":{"uid":"tw2","nickname":"两层"},"auth":{"accessToken":"at-tw2","realm":"cn"}}
+	]}}`, 2, 2)
+	if a := e.account(t, "tw1"); a.AccessToken != "at-tw1" {
+		t.Fatalf("tw1=%+v", a)
+	}
+	if a := e.account(t, "tw2"); a.Nickname != "两层" || a.AccessToken != "at-tw2" {
+		t.Fatalf("tw2=%+v", a)
+	}
+
+	// 三层（data → result → accounts）仍在深度上限内。
+	e2 := newImportTestEnv(t)
+	e2.mustImport(t, `{"data":{"result":{"accounts":[{"uid":"d3","access_token":"at-d3"}]}}}`, 1, 1)
+	e2.account(t, "d3")
+}
+
+// TestImportDeepNestingRejected 超过包裹深度上限 → 400，不进入病态递归。
+func TestImportDeepNestingRejected(t *testing.T) {
+	e := newImportTestEnv(t)
+	code, _ := e.importRaw(t, `{"data":{"data":{"data":{"data":{"accounts":[{"uid":"x","access_token":"y"}]}}}}}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400（超深嵌套应明确报错）", code)
+	}
+}
+
+// TestImportJSONLCRLF JSONL：CRLF 行尾、首尾空白空行、BOM 开头，每行一个对象。
+func TestImportJSONLCRLF(t *testing.T) {
+	e := newImportTestEnv(t)
+	body := "\xef\xbb\xbf\r\n  \r\n" +
+		`{"uid":"jl1","access_token":"at-jl1","nickname":"行一"}` + "\r\n" +
+		`{"account":{"uid":"jl2","nickname":"行二"},"auth":{"accessToken":"at-jl2"}}` + "\r\n" +
+		"   \r\n"
+	resp := e.mustImport(t, body, 2, 2)
+	if len(resp.Errors) != 0 {
+		t.Fatalf("unexpected errors: %v", resp.Errors)
+	}
+	if a := e.account(t, "jl1"); a.Nickname != "行一" {
+		t.Fatalf("jl1=%+v", a)
+	}
+	if a := e.account(t, "jl2"); a.Nickname != "行二" || a.AccessToken != "at-jl2" {
+		t.Fatalf("jl2=%+v", a)
+	}
+}
+
+// TestImportStringArray 字符串数组：JSON 对象字符串照常解析，裸 token 缺 uid 被跳过。
+func TestImportStringArray(t *testing.T) {
+	e := newImportTestEnv(t)
+	code, resp := e.importRaw(t, `[
+		"{\"uid\":\"str1\",\"access_token\":\"at-str1\",\"nickname\":\"字符串账号\"}",
+		"raw-token-without-uid"
+	]`)
+	if code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	if resp.Total != 2 || resp.Imported != 1 || resp.Skipped != 1 {
+		t.Fatalf("resp=%+v, want total=2 imported=1 skipped=1", resp)
+	}
+	if a := e.account(t, "str1"); a.AccessToken != "at-str1" || a.Nickname != "字符串账号" {
+		t.Fatalf("str1=%+v", a)
+	}
+	if joined := strings.Join(resp.Errors, " | "); !strings.Contains(joined, "missing uid") {
+		t.Fatalf("裸 token 应报 missing uid，得到 %v", resp.Errors)
+	}
+}
+
+// TestImportMixedNonObjectItems 数组里混 null / 数字 / 布尔：只跳过这些项，其余照常导。
+func TestImportMixedNonObjectItems(t *testing.T) {
+	e := newImportTestEnv(t)
+	code, resp := e.importRaw(t, `[
+		null,
+		123,
+		false,
+		{"uid":"mx1","access_token":"at-mx1"}
+	]`)
+	if code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	if resp.Total != 4 || resp.Imported != 1 || resp.Skipped != 3 {
+		t.Fatalf("resp=%+v, want total=4 imported=1 skipped=3", resp)
+	}
+	joined := strings.Join(resp.Errors, " | ")
+	for _, want := range []string{"null", "number", "boolean"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("errors 应说明 %s 项被跳过，得到 %v", want, resp.Errors)
+		}
+	}
+	e.account(t, "mx1")
+}
+
+// TestImportNestedAccountAuthListMixed 桌面端 {account,auth} 列表混非对象项。
+func TestImportNestedAccountAuthListMixed(t *testing.T) {
+	e := newImportTestEnv(t)
+	code, resp := e.importRaw(t, `{"accounts":[
+		{"account":{"uid":"1","nickname":"a"},"auth":{"accessToken":"t1","realm":"cn"}},
+		null,
+		{"account":{"uid":"2","nickname":"b"},"auth":{"accessToken":"t2","realm":"cn"}}
+	]}`)
+	if code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	if resp.Total != 3 || resp.Imported != 2 || resp.Skipped != 1 {
+		t.Fatalf("resp=%+v, want total=3 imported=2 skipped=1", resp)
+	}
+	if a := e.account(t, "1"); a.Nickname != "a" || a.AccessToken != "t1" || a.RealmStored() != "cn" {
+		t.Fatalf("uid=1 %+v", a)
+	}
+	if a := e.account(t, "2"); a.Nickname != "b" || a.AccessToken != "t2" {
+		t.Fatalf("uid=2 %+v", a)
+	}
+}
+
+// TestImportExportedTwoAccounts 用户提供的那份「两个账号」导出文件：原有逻辑即可导 2 个。
+func TestImportExportedTwoAccounts(t *testing.T) {
+	e := newImportTestEnv(t)
+	body := `{"exported_at":"2026-10-25T00:00:00Z","accounts":[
+		{"account":{"uid":"1","nickname":"a"},"auth":{"accessToken":"t1","realm":"cn"}},
+		{"account":{"uid":"2","nickname":"b"},"auth":{"accessToken":"t2","realm":"cn"}}
+	]}`
+	e.mustImport(t, body, 2, 2)
+	e.account(t, "1")
+	e.account(t, "2")
+}

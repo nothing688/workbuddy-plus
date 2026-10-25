@@ -14,6 +14,8 @@ let groupsData = [], accGroupFilter = null, metaUID = null;
    轮询更新徽章但绝不动用户手动选的筛选。 */
 let activePool = null, poolGroups = [], activePoolReady = false;
 const probeBusy = Object.create(null), probeResult = Object.create(null);
+/* 浮窗里要展示的账号顺序（本轮测试）——结果不再插进表格行，改在右下角汇总。 */
+const probeFloatUids = [];
 /* 账号池多选：按 uid 存集合而不是读 DOM。账号表每 5s 由轮询重建 tbody，
    勾选状态必须活在 DOM 之外才能在重绘后按住 uid 恢复；切换分组筛选 / 切换调用池
    时清空，避免把上一个范围里的号一起批量改。 */
@@ -529,6 +531,13 @@ function renderAccounts(list, filtered, probe) {
       const tip = (when ? when + ' · ' : '') + s.reason;
       tag = tag.replace('<span class="tag', '<span title="' + esc(tip) + '" class="tag');
     }
+    // 测试结论优先于池状态：测出来不可用的号不再显示「可用」，否则与浮窗里的红色
+    // 结论自相矛盾。原因只进 title，行内不换行；页面刷新后回到服务端口径。
+    const pr = prs[s.uid] || null;
+    if (pr && pr.ok === false) {
+      const why = pr.error ? String(pr.error) : '测试失败（无错误信息）';
+      tag = '<span class="tag bad" title="' + esc('可用性测试：' + why) + '">测试不可用</span>';
+    }
     const note = '';
     const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
@@ -586,19 +595,6 @@ function renderAccounts(list, filtered, probe) {
       : nickHtml;
     const nameCell = '<button class="nm-btn" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
       '" title="' + esc(noteText ? '名称备注：' + noteText + '（点击修改）' : '点击添加账号名称备注') + '">' + nameHtml + '</button>';
-    // 可用性测试的结果挂在账号行下方整行：reply 常是多行，塞进列里会把行撑变形。
-    const pr = prs[s.uid] || null;
-    let probeRow = '';
-    if (pr) {
-      const lat = formatLatency(pr.latency_ms);
-      probeRow = '<tr class="probe-row"><td colspan="10"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
-        (pr.ok
-          ? '<span class="tag ok">可用' + (lat === '—' ? '' : ' · ' + esc(lat)) + '</span>'
-          : '<span class="tag bad">不可用</span><span>' + esc(pr.error || '测试失败（无错误信息）') + '</span>') +
-        (pr.model ? '<span class="probe-model">' + esc(pr.model) + '</span>' : '') +
-        (pr.ok && pr.reply ? '<details class="probe-reply"><summary>查看回复</summary><div class="body">' + esc(pr.reply) + '</div></details>' : '') +
-        '</div></td></tr>';
-    }
     // 勾选按 uid 从模块级集合恢复：5s 轮询重建 tbody 后选中行不会掉。
     // 顶层单测沙箱里没有 accSel（只切这一段求值），typeof 兜底成未选中。
     const picked = typeof accSel !== 'undefined' && accSel.has(s.uid);
@@ -641,7 +637,7 @@ function renderAccounts(list, filtered, probe) {
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
       ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
-      '</div></td></tr>' + probeRow;
+      '</div></td></tr>';
 
   }).join('');
   syncAccSelHead(list);
@@ -800,12 +796,68 @@ async function runProbeChat(uid) {
     });
     probeResult[uid] = Object.assign({ ok: false }, r || {});
   } catch (e) {
-    // 网络/404 也要给结论，否则行内一直空白，用户不知道是没测还是测失败。
+    // 网络/404 也要给结论，否则浮窗一直空着，用户不知道是没测还是测失败。
     probeResult[uid] = { ok: false, error: e.message };
   } finally {
     delete probeBusy[uid];
+    // 单个测试：浮窗只显示这一个号（批量测试会自己占满列表）。
+    probeFloatUids.length = 0;
+    probeFloatUids.push(uid);
+    renderProbeFloat();
     paintAccounts();
+    // 顶部计数跟着测试结论走：拉一次 overview，让「可用」立刻扣掉这个号，
+    // 不用等 5s 轮询（否则会出现上面写可用、浮窗写不可用的空窗期）。
+    loadOverview(true);
   }
+}
+
+/* ── 测试结果浮窗 ────────────────────────────────────────────────
+   结果不再插进表格行：右下角浮窗按本轮测试顺序汇总，超高自己滚，点关闭才收起。
+   行内状态标签同时变成「测试不可用」（见 renderAccounts），顶部「可用」计数也扣掉，
+   三处口径一致。 */
+function closeProbeFloat() {
+  probeFloatUids.length = 0;
+  renderProbeFloat();
+}
+
+function renderProbeFloat() {
+  const box = $('probeFloat');
+  if (!box) return;
+  if (!probeFloatUids.length) { box.hidden = true; box.innerHTML = ''; return; }
+  const all = (overviewData && overviewData.accounts) || [];
+  const byUid = new Map(all.map(a => [a.uid, a]));
+  let ok = 0, bad = 0, running = 0;
+  const rows = probeFloatUids.map(uid => {
+    const acc = byUid.get(uid) || { uid: uid };
+    const res = probeResult[uid];
+    const busy = !!probeBusy[uid];
+    if (busy) running++;
+    else if (res && res.ok) ok++;
+    else if (res) bad++;
+    const name = acc.note || acc.nickname || String(uid).slice(0, 10);
+    let verdict = '<span class="tag">—</span>', body = '';
+    if (busy) verdict = '<span class="tag">测试中…</span>';
+    else if (res && res.ok) {
+      const lat = formatLatency(res.latency_ms);
+      verdict = '<span class="tag ok">可用</span>' + (lat === '—' ? '' : '<span class="pf-meta">' + esc(lat) + '</span>');
+      if (res.reply) body = '<div class="pf-reply">' + esc(res.reply) + '</div>';
+    } else if (res) {
+      verdict = '<span class="tag bad">不可用</span>';
+      body = '<div class="pf-err">' + esc(res.error || '测试失败（无错误信息）') + '</div>';
+    }
+    return '<div class="pf-item"><div class="pf-top">' +
+      '<span class="pf-who" title="' + esc(uid) + '">' + esc(name) + '</span>' +
+      (res && res.model ? '<span class="pf-meta">' + esc(res.model) + '</span>' : '') +
+      verdict + '</div>' + body + '</div>';
+  }).join('');
+  const sub = [ok ? ok + ' 可用' : '', bad ? bad + ' 不可用' : '', running ? running + ' 进行中' : '']
+    .filter(Boolean).join(' · ') || '等待结果';
+  box.innerHTML = '<div class="pf-head"><b>可用性测试</b><span class="pf-sub">' + esc(sub) + '</span>' +
+    '<button class="xs ghost pf-close" type="button">关闭</button></div>' +
+    '<div class="pf-body">' + rows + '</div>';
+  box.hidden = false;
+  const btn = box.querySelector('.pf-close');
+  if (btn) btn.onclick = closeProbeFloat;
 }
 
 // accFrozen 判断「这号是不是被封禁/冷却」——与 renderAccounts 里 frozen 同口径，
@@ -843,6 +895,10 @@ async function runProbeAll() {
   probeAllRunning = true;
   const btn = $('btnProbeAll');
   const total = list.length;
+  // 浮窗先按本轮顺序铺好待测名单，逐个出结果时原地更新（不重新排序，不跳动）。
+  probeFloatUids.length = 0;
+  list.forEach(a => { if (a && a.uid && probeFloatUids.indexOf(a.uid) < 0) probeFloatUids.push(a.uid); });
+  renderProbeFloat();
   let done = 0, ok = 0, bad = 0, skipped = 0;
   const progress = () => { if (btn) btn.textContent = '测试中 ' + done + '/' + total; };
   if (btn) { btn.disabled = true; progress(); }
@@ -881,6 +937,7 @@ async function runProbeAll() {
       delete probeBusy[uid];
       done++;
       progress();
+      renderProbeFloat();
       paintAccounts();
     }
   };
@@ -898,7 +955,9 @@ async function runProbeAll() {
   } finally {
     probeAllRunning = false;
     if (btn) { btn.disabled = false; btn.textContent = '全部测试'; }
+    renderProbeFloat();
     paintAccounts();
+    loadOverview(true); // 同上：批量结束后立刻把「可用」对齐测试结论
   }
   toast('全部测试完成：可用 ' + ok + ' / 不可用 ' + bad + ' / 跳过 ' + skipped, bad ? 'warn' : 'ok');
 }
@@ -1062,18 +1121,30 @@ async function loadOverview(quiet) {
   try {
     const d = await api('overview');
     overviewData = d;
+    const accs = d.accounts || [];
+    // 「可用」要和测试结论一致：本轮测试判死的号从顶部计数里扣掉，否则上面写可用、
+    // 下面写不可用。probeResult 只在内存里，刷新页面回到服务端口径。
+    const probeBad = accs.filter(s => {
+      const pr = probeResult[s.uid];
+      return pr && pr.ok === false && !s.disabled && !s.paused;
+    }).length;
     $('sTotal').textContent = d.total;
-    $('sHealthy').textContent = d.healthy;
+    $('sHealthy').textContent = Math.max(0, (d.healthy || 0) - probeBad);
+    $('sHealthy').title = probeBad
+      ? '服务端口径 ' + d.healthy + ' 个可用；其中 ' + probeBad + ' 个可用性测试判定不可用（本次会话内有效）'
+      : '';
     $('sCooling').textContent = d.cooling;
     $('sDisabled').textContent = d.disabled;
     // 暂停选号单列（issue #125）：它只关选号、照常签到保活，与禁用是两种状态。
     if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
     // 积分口径（两个数分母不同，标签里已标注）：剩余合计**排除已禁用账号**——它们不参与
     // 选号，账上的剩余额度实际上花不出去；总额合计**包含全部账号**，看的是保有量。
-    const accs = d.accounts || [];
     const remSum = accs.reduce((a, s) => a + (s.disabled ? 0 : (s.credits || 0)), 0);
     const totSum = accs.reduce((a, s) => a + (s.credits_total || 0), 0);
-    $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    // 总额用小字跟在斜杠后：长数字在窄卡片里可折行，不会顶出边框。
+    $('sCredits').innerHTML = totSum > 0
+      ? String(remSum) + '<span class="of">/ ' + totSum + '</span>'
+      : String(remSum);
     $('sCredits').title = d.disabled
       ? '剩余合计（不含已禁用 ' + d.disabled + ' 个账号）/ 总额合计（含全部账号）'
       : '剩余合计 / 总额合计（均含全部账号）';
@@ -2370,34 +2441,52 @@ $('btnAddApiKey').onclick = async () => {
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
 $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textContent)
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
+// 导入：按文件逐个 POST，多选/多账号一个入口解决。后端每个文件都能识别数组、
+// 包裹对象、JSONL 与字符串 token 列表，前端只负责把选中文件全都送上去。
 $('importFile').onchange = async () => {
-  const file = $('importFile').files[0];
-  if (!file) return;
+  const files = Array.from($('importFile').files || []);
+  if (!files.length) return;
   $('importDone').hidden = true; $('importErr').hidden = true;
-  const fd = new FormData();
-  fd.append('file', file);
-  // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
   const importGroup = ($('importGroup').value || '').trim();
-  if (importGroup) fd.append('group', importGroup);
   const h = {};
   const k = localStorage.getItem(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
-  try {
-    const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
-    $('importDone').hidden = false;
-    $('importDone').textContent = '导入完成：成功 ' + d.imported + ' 个' + (d.skipped ? '，跳过 ' + d.skipped + ' 个' : '');
-    if (d.errors && d.errors.length) {
-      console.warn('import errors:', d.errors);
+  let imported = 0, skipped = 0, groups = 0;
+  const failed = [], detail = [];
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
+    if (importGroup) fd.append('group', importGroup);
+    try {
+      const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      imported += d.imported || 0;
+      skipped += d.skipped || 0;
+      if (d.group) groups++;
+      if (d.errors && d.errors.length) {
+        console.warn('import errors (' + file.name + '):', d.errors);
+        detail.push(file.name + '：' + d.errors.slice(0, 3).join('；'));
+      }
+    } catch (e) {
+      failed.push(file.name + '：' + e.message);
     }
-    invalidatePackages();
-    loadOverview(true);
-    loadGroups();
-  } catch (e) {
-    $('importErr').hidden = false;
-    $('importErr').textContent = '导入失败：' + e.message;
   }
+  if (imported || !failed.length) {
+    $('importDone').hidden = false;
+    $('importDone').textContent = '导入完成：' + files.length + ' 个文件，成功 ' + imported + ' 个'
+      + (skipped ? '，跳过 ' + skipped + ' 个' : '')
+      + (groups ? '，归入分组「' + importGroup + '」' : '');
+  }
+  if (failed.length || detail.length) {
+    $('importErr').hidden = false;
+    $('importErr').textContent = (failed.length ? '失败：' + failed.join('；') : '')
+      + (detail.length ? (failed.length ? ' ｜ ' : '') + detail.join('；') : '');
+  }
+  invalidatePackages();
+  loadOverview(true);
+  loadGroups();
   $('importFile').value = '';
 };
 

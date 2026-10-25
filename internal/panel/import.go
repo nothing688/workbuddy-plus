@@ -36,8 +36,16 @@ var (
 	importAliasNote  = []string{"note", "remark", "comment"}
 )
 
-// importContainerKeys 包裹对象的候选键（按顺序找第一个数组值）。
+// importContainerKeys 包裹对象的候选键（按顺序找第一个数组值，值仍是对象则继续下钻）。
 var importContainerKeys = []string{"accounts", "data", "items", "list", "result"}
+
+// importMaxWrapperDepth 包裹对象的最大下钻层数。真实导出最多两层
+// （如 {"data":{"accounts":[...]}}），留一层余量后仍能挡住病态嵌套。
+const importMaxWrapperDepth = 3
+
+// importIssueKey 解析层给「不是账号对象」的条目打的标记，值是一句人话原因。
+// 该键不命中任何别名字段，只在 importCockpit 里转成 errors 文案。
+const importIssueKey = "_import_issue"
 
 // importCockpit 接收多种来源的账号 JSON 文件，批量导入账号到池中。
 //
@@ -46,7 +54,8 @@ var importContainerKeys = []string{"accounts", "data", "items", "list", "result"
 //	Body: file=<json>
 //
 // 路由名沿用 cockpit（前端已固定），但内容不再只认 cockpit tools 的导出格式：
-// 顶层数组 / 单个账号对象 / {accounts|data|items|list|result: [...]} 包裹均可，
+// 顶层数组 / 单个账号对象 / 任意包裹数组（可嵌套，深度见 importMaxWrapperDepth）/
+// JSONL（每行一个 JSON 值）/ 字符串数组（JSON 对象字符串或裸 access_token）均可，
 // 字段按 importAlias* 别名字表取值。返回 {ok, total, imported, skipped, errors, group}。
 func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -82,6 +91,13 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	var errs []string
 
 	for i, acc := range accounts {
+		// 解析层标记的「根本不是账号」的条目（null / 数字 / 裸 token 缺 uid）：
+		// 直接按解析层给的文案跳过，错误信息比「missing uid」更能说明原因。
+		if issue, ok := acc[importIssueKey].(string); ok && issue != "" {
+			skipped++
+			errs = append(errs, fmt.Sprintf("#%d: %s", i+1, issue))
+			continue
+		}
 		uid := importString(acc, importAliasUID)
 		at := importString(acc, importAliasAccess)
 		rt := importString(acc, importAliasRefresh)
@@ -216,49 +232,162 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 
 // parseImportAccounts 把任意来源的 JSON 解成账号对象数组。每个对象已做键折叠
 // （小写）与嵌套 token 子对象合并，后续取值无需再关心原始大小写。
+//
+// 支持四种输入：JSON 文档（数组 / 单对象 / 包裹对象）、JSONL（多行 JSON 值，含
+// 首尾空白、BOM、CRLF）、数组里混的字符串（JSON 对象字符串或裸 access_token）、
+// 以及数组里混的 null / 数字等非对象项（保留为一条 issue 记录，便于统计与报错）。
 func parseImportAccounts(raw []byte) ([]map[string]any, error) {
-	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf")) // 容忍 Windows 导出带 BOM
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber() // 保住大整数 uid 的精度（float64 会丢低位）
-	var root any
-	if err := dec.Decode(&root); err != nil {
-		return nil, err
+	// 容忍 BOM（可能在首行，也可能散落在 JSONL 各行的行首）。
+	raw = bytes.ReplaceAll(raw, []byte("\xef\xbb\xbf"), nil)
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("empty input: no json content")
 	}
 
-	switch v := root.(type) {
+	// 流式解码：单个 JSON 文档只得到一个值；JSONL 会依次得到多个值。
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber() // 保住大整数 uid 的精度（float64 会丢低位）
+	var roots []any
+	for {
+		var v any
+		err := dec.Decode(&v)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		roots = append(roots, v)
+	}
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("empty input: no json value found")
+	}
+
+	out := make([]map[string]any, 0, len(roots))
+	for _, root := range roots {
+		list, found, err := unwrapImportAccounts(root, 1)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			// 不是包裹对象 → 整个值就是一个账号；标量（字符串 = 裸 token）按单项处理。
+			list = importListItems([]any{root})
+		}
+		out = append(out, list...)
+	}
+	return out, nil
+}
+
+// unwrapImportAccounts 递归找包裹数组。found=false 表示这一层不是包裹对象，
+// 由调用方按「单个账号」兜底。depth 从 1 起，超过 importMaxWrapperDepth 报错，
+// 避免病态嵌套（或恶意构造）把递归打爆。
+func unwrapImportAccounts(node any, depth int) ([]map[string]any, bool, error) {
+	switch v := node.(type) {
 	case []any:
-		return importObjectList(v), nil
+		return importListItems(v), true, nil
 	case map[string]any:
-		// 包裹对象：按 importContainerKeys 顺序取第一个命中的数组。
 		for _, key := range importContainerKeys {
-			for k, val := range v {
-				if !strings.EqualFold(strings.TrimSpace(k), key) {
-					continue
+			val, ok := importLookupFold(v, key)
+			if !ok {
+				continue
+			}
+			switch inner := val.(type) {
+			case []any:
+				return importListItems(inner), true, nil
+			case map[string]any:
+				// 两层及以上包裹，如 {"data":{"accounts":[...]}}。
+				if depth >= importMaxWrapperDepth {
+					return nil, false, fmt.Errorf("json too deeply nested: wrapper depth exceeds %d", importMaxWrapperDepth)
 				}
-				if arr, ok := val.([]any); ok {
-					return importObjectList(arr), nil
+				list, found, err := unwrapImportAccounts(inner, depth+1)
+				if err != nil {
+					return nil, false, err
+				}
+				if found {
+					return list, true, nil
 				}
 			}
 		}
-		// 没有包裹数组 → 整个对象就是一个账号。
-		return []map[string]any{normalizeImportAccount(v)}, nil
-	default:
-		return nil, fmt.Errorf("unsupported json shape: expected account object or array")
 	}
+	return nil, false, nil
 }
 
-// importObjectList 把 []any 逐项转成账号对象；非对象元素保留为空对象，
-// 由调用方按「缺 uid」跳过并记错误（总数仍然对得上）。
-func importObjectList(list []any) []map[string]any {
+// importLookupFold 大小写不敏感地取键值（键可能带空白，导入文件不受约束）。
+func importLookupFold(obj map[string]any, key string) (any, bool) {
+	for k, v := range obj {
+		if strings.EqualFold(strings.TrimSpace(k), key) {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// importListItems 把数组元素逐项转成账号对象：
+//
+//	对象            → 折叠键名 + 合并嵌套凭证
+//	字符串          → 先按 JSON 对象解析；失败则当作裸 access_token（缺 uid，跳过）
+//	null / 数字 / … → 保留一条 issue，由调用方跳过并记 errors
+//
+// 每项都产出一条记录，total 与文件里的条目数始终对得上。
+func importListItems(list []any) []map[string]any {
 	out := make([]map[string]any, 0, len(list))
 	for _, item := range list {
-		if obj, ok := item.(map[string]any); ok {
-			out = append(out, normalizeImportAccount(obj))
-			continue
+		switch v := item.(type) {
+		case map[string]any:
+			out = append(out, normalizeImportAccount(v))
+		case string:
+			if acc, ok := importAccountFromString(v); ok {
+				out = append(out, acc)
+				continue
+			}
+			out = append(out, map[string]any{
+				importIssueKey: "missing uid (bare token string carries no uid)",
+			})
+		default:
+			out = append(out, map[string]any{
+				importIssueKey: fmt.Sprintf("skipped non-object item (json %s, cannot read uid/access_token)", importJSONKind(item)),
+			})
 		}
-		out = append(out, map[string]any{})
 	}
 	return out
+}
+
+// importAccountFromString 字符串本身是 JSON 对象时解析成账号对象。
+func importAccountFromString(s string) (map[string]any, bool) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "{") {
+		return nil, false
+	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return normalizeImportAccount(obj), true
+}
+
+// importJSONKind 给错误信息用的 JSON 类型名。
+func importJSONKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return "string"
+	case bool:
+		return "boolean"
+	case json.Number, float64:
+		return "number"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	}
+	return fmt.Sprintf("%T", v)
 }
 
 // normalizeImportAccount 浅合并嵌套子对象并折叠键名。
