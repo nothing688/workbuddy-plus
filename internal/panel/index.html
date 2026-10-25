@@ -1216,6 +1216,15 @@ input::placeholder { color: var(--ink-3); }
   #view-accounts table.acc td.acts { width: auto; white-space: normal; }
   #view-accounts .acts-inner { width: 100%; }
 }
+
+/* 桌面列宽最终配比：一排 7 个按钮 + 完整数据列，总宽 1158 不横滚 */
+.who { max-width: 170px; }
+.who .nm { white-space: normal; word-break: break-word; line-height: 1.35; }
+.acc th:nth-child(4), .acc td:nth-child(4) { min-width: 136px; }  /* 状态 */
+.acc th:nth-child(8), .acc td:nth-child(8) { min-width: 178px; }  /* 用量 */
+.acc th.c-acts, .acc td.acts { width: auto; }
+.acts-inner { gap: 3px; }
+.acts-inner button { padding: 0 8px; font-size: 11.5px; }
 </style>
 </head>
 <body>
