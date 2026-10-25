@@ -1124,6 +1124,10 @@ input::placeholder { color: var(--ink-3); }
   display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
   overflow: hidden; word-break: break-word;
 }
+
+/* 导航选中态：用内描边替代外挂色条，避免色条跑到侧栏外 */
+.nav a.on::before { display: none; }
+.nav a.on { box-shadow: inset 3px 0 0 var(--accent); }
 </style>
 </head>
 <body>
