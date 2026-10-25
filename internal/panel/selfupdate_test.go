@@ -54,7 +54,8 @@ func newSelfUpdatePanel(t *testing.T, curVersion string, zipBytes []byte, digest
 				"assets": []map[string]any{{
 					"name":                 assetName,
 					"size":                 len(zipBytes),
-					"browser_download_url": "https://" + r.Host + "/asset.zip",
+					"browser_download_url": "https://" + r.Host + "/browser-download.zip", // 私有仓库这个地址回 404
+					"url":                  "https://" + r.Host + "/asset.zip",            // 真正可下载的是 API 地址
 					"digest":               digest,
 				}},
 			}

@@ -60,9 +60,12 @@ func normalizeSelfUpdate(c SelfUpdateConfig) SelfUpdateConfig {
 
 // releaseAsset 单个发布资产。digest 形如 "sha256:<hex>"（GitHub 自 2025 起提供）。
 type releaseAsset struct {
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	// URL 是网页下载地址（browser_download_url）。私有仓库未登录时它回 404，
+	// 真正能带 token 下载的是 API 地址（url + Accept: application/octet-stream）。
 	URL    string `json:"browser_download_url"`
+	APIURL string `json:"url"`
 	Digest string `json:"digest"`
 }
 
@@ -153,7 +156,11 @@ func (p *Panel) selfUpdateApply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "已是最新版本（运行中 "+p.cfg.Version+"，最新 "+latest+"）")
 		return
 	}
-	if u, err := url.Parse(asset.URL); err != nil || u.Scheme != "https" {
+	dlURL := asset.APIURL
+	if dlURL == "" {
+		dlURL = asset.URL
+	}
+	if u, err := url.Parse(dlURL); err != nil || u.Scheme != "https" {
 		writeErr(w, http.StatusBadGateway, "资产地址不是 https，拒绝下载")
 		return
 	}
@@ -167,7 +174,7 @@ func (p *Panel) selfUpdateApply(w http.ResponseWriter, r *http.Request) {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	h := sha256.New()
-	n, err := p.downloadTo(io.MultiWriter(tmp, h), asset.URL, cfg.Token)
+	n, err := p.downloadTo(io.MultiWriter(tmp, h), dlURL, cfg.Token)
 	tmp.Close()
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "下载失败："+err.Error())
@@ -239,7 +246,15 @@ func (p *Panel) fetchLatestRelease(cfg SelfUpdateConfig) (*releaseInfo, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
+		// 私有仓库在未鉴权时对 /releases/latest 也回 404（不是「没有 Release」），
+		// 两种原因分开说，否则会让人一直去查标签。
+		if cfg.Token == "" {
+			return nil, fmt.Errorf("GitHub 404：仓库 %s 不存在、为私有，或没有 Release。私有仓库需要在 panel.self_update.token 配只读 token", cfg.Repo)
+		}
 		return nil, fmt.Errorf("仓库 %s 没有 Release（先打 v* 标签发布）", cfg.Repo)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("GitHub API %d：token 无效或权限不足（需要 repo 读权限）", resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API %d", resp.StatusCode)
@@ -301,6 +316,8 @@ func (p *Panel) downloadTo(w io.Writer, rawURL, token string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// API 资产端点要这个 Accept 才会回二进制；网页下载地址忽略它也无害。
+	req.Header.Set("Accept", "application/octet-stream")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
