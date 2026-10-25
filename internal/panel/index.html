@@ -1096,6 +1096,16 @@ input::placeholder { color: var(--ink-3); }
   #view-packages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #view-packages > .box:first-child { grid-column: 1 / -1; }
 }
+
+/* 弹窗统一居中：包括窄屏（原来是底部抽屉，视觉上不在屏幕中间） */
+.veil.on { align-items: center; justify-content: center; padding: 20px; }
+@media (max-width: 760px) {
+  .veil.on { align-items: center; justify-content: center; padding: 12px; }
+  .veil.on .dlg {
+    width: 100% !important; max-width: 100% !important;
+    max-height: 92vh; border-radius: 16px;
+  }
+}
 </style>
 </head>
 <body>
