@@ -1147,6 +1147,23 @@ input::placeholder { color: var(--ink-3); }
 .who .nm .grp-badge { flex: none; padding: 0 6px; font-size: 10.5px; line-height: 16px; }
 .acc th:nth-child(4), .acc td:nth-child(4) { min-width: 150px; } /* 状态列 */
 .usage-cell { min-width: 200px; }
+
+/* 对齐 7865（plus）账号池排版：按钮用自然宽度单排右对齐，列宽比例接近 */
+.who { min-width: 0; max-width: 158px; }
+.acc th:nth-child(4), .acc td:nth-child(4) { min-width: 130px; }  /* 状态 */
+.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 96px; }   /* 积分 */
+.acc th:nth-child(8), .acc td:nth-child(8) { min-width: 232px; }  /* 用量 */
+.acc th:nth-child(9), .acc td:nth-child(9) { min-width: 72px; }   /* 最近成功 */
+.acc th.c-acts, .acc td.acts { width: 1px; white-space: nowrap; }
+.acts-inner {
+  display: flex; gap: 4px; justify-content: flex-end; align-items: center;
+  grid-template-columns: none;
+}
+.acts-inner .slot { display: none; }
+.acts-inner button {
+  width: auto; height: 24px; padding: 0 10px; font-size: 12px;
+  flex: none; white-space: nowrap;
+}
 </style>
 </head>
 <body>
