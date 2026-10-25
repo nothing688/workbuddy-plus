@@ -2172,18 +2172,17 @@ function renderRequestTable() {
     const ua = e && e.user_agent ? e.user_agent : '';
     const rid = e && e.request_id ? e.request_id : '';
     return '<tr title="' + esc(requestLogText(e)) + '">' +
-      '<td class="num">' + esc(when) + '</td>' +
-      '<td>' + reqOutcomeTag(e) + '</td>' +
-      '<td title="' + esc(e && e.model || '') + '">' + esc(e && e.model || '—') + '</td>' +
-      '<td title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</td>' +
-      '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
-      '<td class="num">' + reqTokenCell(e) + '</td>' +
-      '<td class="num">' + reqCreditCell(e) + '</td>' +
-      '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td><div class="rl1">' + reqOutcomeTag(e) + '</div>' +
+        '<div class="rl2 mono">' + esc(when) + '</div></td>' +
+      '<td><div class="rl1">' + esc(e && e.model || '—') + '</div>' +
+        '<div class="rl2 mono">' + esc(e && e.account || '—') + '</div></td>' +
+      '<td><div class="rl1 mono">' + (ip ? esc(ip) : '<span class="muted">—</span>') + '</div>' +
+        '<div class="rl2 mono">' + (ua ? esc(ua) : '<span class="muted">—</span>') + '</div></td>' +
+      '<td class="num"><div class="rl1">' + fmtMs(e && e.duration_ms) + '</div>' +
+        '<div class="rl2">' + reqTokenCell(e) + ' · ' + reqCreditCell(e) + '</div></td>' +
+      '<td><div class="rl1 mono">' + (rid ? esc(rid) : '<span class="muted">—</span>') + '</div></td>' +
       '</tr>';
-  }).join('') || '<tr><td colspan="10" class="empty">' +
+  }).join('') || '<tr><td colspan="5" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
 
   const filtered = list.length !== reqEntries.length;

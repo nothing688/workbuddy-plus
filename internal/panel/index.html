@@ -743,12 +743,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .vtabs button.on .cnt { color: var(--ink-2); }
 
   /* ── 请求记录表（运行日志）────────────────────────────────────────── */
-  /* 定宽列 + 省略号：自动布局会把「Token」撑到 178px、「耗时」压到 43px，
-     整表还比容器宽 80px 需要横向滚动。给每列定宽后，User-Agent 吃剩余空间。 */
+  /* 两行一格：结果/时间、模型/账号、IP/UA、耗时·Token·积分 各占一列的两行，
+     请求 ID 单独一列。这样 10 个字段都能完整显示，不用省略号、也不用横向滚动
+     （十列挤一行时，模型名和 uid 必然放不下，只能截断）。 */
   .acc.req { table-layout: fixed; width: 100%; min-width: 900px; }
-  .acc.req td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .acc.req td .clip { display: inline-block; max-width: 100%; vertical-align: middle; }
-  /* 徽标是 inline-flex，默认贴在文字基线上，会把行高从 39px 顶到 59px */
+  .acc.req td { white-space: normal; overflow: visible; text-overflow: clip; }
+  .acc.req .rl1 { line-height: 1.45; }
+  .acc.req .rl2 { margin-top: 3px; color: var(--ink-3); font-size: 11.5px; line-height: 1.45; word-break: break-all; }
+  .acc.req .mono { font-family: var(--mono); }
   .acc.req td .tag { vertical-align: middle; }
   /* 请求指标是 6 张卡：默认 flex 基准会让第 6 张单独落到第二行、还撑成整行宽，
      看着像「排版不均」。这里收窄基准，让 6 张在常见宽度下排成一行。 */
@@ -2171,14 +2173,11 @@ input::placeholder { color: var(--ink-3); }
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <colgroup>
-              <col style="width:8%"><col style="width:11%"><col style="width:17%"><col style="width:9%">
-              <col style="width:12%"><col style="width:10%">
-              <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:16%">
+              <col style="width:13%"><col style="width:25%"><col style="width:30%"><col style="width:14%"><col style="width:18%">
             </colgroup>
             <thead><tr>
-              <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
-              <th>来源 IP</th><th>User-Agent</th>
-              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th>请求 ID</th>
+              <th>结果 / 时间</th><th>模型 / 账号</th><th>来源 IP / User-Agent</th>
+              <th class="num">耗时 · Token · 积分</th><th>请求 ID</th>
             </tr></thead>
             <tbody id="reqBody"></tbody>
           </table>
