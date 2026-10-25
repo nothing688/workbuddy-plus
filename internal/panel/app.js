@@ -1194,6 +1194,40 @@ if ($('accSelAll')) {
 if ($('btnAccMove')) $('btnAccMove').onclick = () => openGroupPicker(null, true);
 if ($('btnAccSelClear')) $('btnAccSelClear').onclick = () => { accSel.clear(); paintAccounts(); };
 
+/* ── 导出账号 ──────────────────────────────────────────────────────
+   与导入同构（account + auth + group/note），导出后可原样再导入。
+   文件含 token 明文，下载前明确确认。 */
+if ($('btnExportAccounts')) $('btnExportAccounts').onclick = async () => {
+  if (!confirm('导出文件包含 access / refresh token 明文，等同账号凭证，请妥善保管。继续导出？')) return;
+  const b = $('btnExportAccounts');
+  b.disabled = true;
+  try {
+    const h = {};
+    const k = localStorage.getItem(LS_KEY);
+    if (k) h['Authorization'] = 'Bearer ' + k;
+    const r = await fetch('/panel/api/export/accounts', { headers: h });
+    if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^";]+)"?/.exec(cd);
+    const name = m ? m[1] : 'workbuddy-accounts.json';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('已导出 ' + name, 'ok');
+  } catch (e) {
+    toast('导出失败：' + e.message, 'err');
+  } finally {
+    b.disabled = false;
+  }
+};
+
 /* ── 分组选择（合并了筛选与切换目标）────────────────────────────────
    下拉只改**查看范围**；要改线上路由必须点「切换」。 */
 if ($('poolActiveSelect')) $('poolActiveSelect').onchange = () => {

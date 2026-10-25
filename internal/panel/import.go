@@ -31,6 +31,9 @@ var (
 	importAliasDomain  = []string{"domain", "site", "host"}
 	importAliasRealm   = []string{"realm"}
 	importAliasDevice  = []string{"device_token", "devicetoken"}
+	// 导出文件里的运维元数据（分组 / 名称备注）：导入时按条回填，实现往返不丢。
+	importAliasGroup = []string{"group", "groupname", "group_name"}
+	importAliasNote  = []string{"note", "remark", "comment"}
 )
 
 // importContainerKeys 包裹对象的候选键（按顺序找第一个数组值）。
@@ -146,15 +149,30 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		isNewAccount := p.cfg.Pool.AuthByUID(uid) == nil
-		// 先取原备注：SetMeta 是整条覆盖，直接传空会把用户手写的备注清掉。
-		prevNote := ""
+		// 先取原分组/原备注：SetMeta 是整条覆盖，直接传空会把用户手写的元数据清掉。
+		prevNote, prevGroup := "", ""
 		if st, ok := p.cfg.Pool.Status(uid); ok {
-			prevNote = st.Note
+			prevNote, prevGroup = st.Note, st.Group
 		}
 		p.cfg.Pool.Add(a)
 		p.cfg.Pool.Revive(uid)
-		if group != "" {
-			p.cfg.Pool.SetMeta(uid, group, prevNote)
+		// 分组来源优先级：表单 group > 单条记录里的 group > 保留原分组。
+		// 备注同构：单条记录里的 note 覆盖，缺省保留原备注。
+		// 这样导出文件可以直接再导入（往返不丢分组/备注）。
+		wantGroup, wantNote := group, prevNote
+		if wantGroup == "" {
+			if g := importString(acc, importAliasGroup); g != "" {
+				wantGroup = g
+			}
+		}
+		if n := importString(acc, importAliasNote); n != "" {
+			wantNote = n
+		}
+		if wantGroup == "" {
+			wantGroup = prevGroup
+		}
+		if wantGroup != prevGroup || wantNote != prevNote {
+			p.cfg.Pool.SetMeta(uid, wantGroup, wantNote)
 		}
 
 		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
@@ -247,9 +265,20 @@ func importObjectList(list []any) []map[string]any {
 //
 // 合并顺序：先铺开 token / tokens / credentials 子对象的键，再铺顶层键——
 // **顶层优先**（同一字段两处都给了值时，以账号对象顶层的值为准）。
+// importContainers 常见的「账号/凭证」容器键：值是一个对象，内部字段才真正携带
+// uid / token / 到期时间。真实导出格式多为 account+auth 两层（CodeBuddy 桌面端、
+// 插件、各类工具），也有把凭证塞在 token/credentials 里的。
+// 合并顺序＝从左到右，后者覆盖前者；容器自身的键不参与别名匹配。
+var importContainers = []string{
+	"account", "user", "profile",
+	"auth", "credential", "credentials",
+	"token", "tokens",
+}
+
 func normalizeImportAccount(obj map[string]any) map[string]any {
-	out := make(map[string]any, len(obj)+8)
-	for _, container := range []string{"token", "tokens", "credentials"} {
+	out := make(map[string]any, len(obj)+16)
+	// 1) 先按容器顺序摊平（内层字段互相覆盖：auth 的 token 覆盖 account 里的同名字段）
+	for _, container := range importContainers {
 		for k, v := range obj {
 			if strings.ToLower(strings.TrimSpace(k)) != container {
 				continue
@@ -263,10 +292,26 @@ func normalizeImportAccount(obj map[string]any) map[string]any {
 			}
 		}
 	}
+	// 2) 顶层字段最后写入 → 顶层永远优先于容器内同名值。
+	// 注意：只有「值是对象」的容器键才跳过；顶层 `"token": "at-xxx"` 这种字符串
+	// 必须保留（它是 access_token 的合法别名，不能因为键名撞上容器而被吞掉）。
 	for k, v := range obj {
-		out[strings.ToLower(strings.TrimSpace(k))] = v
+		key := strings.ToLower(strings.TrimSpace(k))
+		if _, isObj := v.(map[string]any); isObj && isImportContainer(key) {
+			continue
+		}
+		out[key] = v
 	}
 	return out
+}
+
+func isImportContainer(key string) bool {
+	for _, c := range importContainers {
+		if key == c {
+			return true
+		}
+	}
+	return false
 }
 
 // importString 按别名顺序取第一个非空字符串值（数字按十进制文本处理）。

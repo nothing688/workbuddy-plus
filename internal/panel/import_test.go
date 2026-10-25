@@ -278,3 +278,27 @@ func TestImportWrappedEmptyArray(t *testing.T) {
 func itoa(v int64) string {
 	return strconv.FormatInt(v, 10)
 }
+
+// TestImportNestedAccountAuth 覆盖 account + auth 两层嵌套（CodeBuddy 桌面端导出形态）：
+// uid/nickname 在内层 account，token/到期/realm 在内层 auth。
+func TestImportNestedAccountAuth(t *testing.T) {
+	e := newImportTestEnv(t)
+	body := `{
+	  "account": {"enterpriseId":"","nickname":"15980960215","uid":"nested-uid-1"},
+	  "auth": {"accessToken":"at-nested","refreshToken":"rt-nested","domain":"www.codebuddy.cn","expiresAt":1794269489,"realm":"cn"}
+	}`
+	e.mustImport(t, body, 1, 1)
+	a := e.account(t, "nested-uid-1")
+	if a.Nickname != "15980960215" {
+		t.Fatalf("nickname=%q", a.Nickname)
+	}
+	if a.Realm() != "cn" {
+		t.Fatalf("realm=%q", a.Realm())
+	}
+	if got := a.AccessTokenValue(); got != "at-nested" {
+		t.Fatalf("access token=%q", got)
+	}
+	if a.ExpiresAt != 1794269489 {
+		t.Fatalf("expires=%d", a.ExpiresAt)
+	}
+}
