@@ -2,6 +2,14 @@
 # 三方合并逻辑在 scripts/sync_upstream.sh，基线见 scripts/upstreams.txt。
 # api_trigger_sync_upstream 是同一套流程的 API 入口，便于用 cnb CLI 手动验证。
 $:
+  # 云原生开发：不声明 docker.image，沿用默认镜像 cnbcool/default-dev-env。
+  # CodeBuddy Web 经 cnb.cool 反向代理访问，Host 既不是 localhost / IP，也不是 tunnel
+  # 域名，会被 Gateway 的 DNS rebinding 保护拦成 {"error":"Host not allowed"}；关掉校验。
+  vscode:
+    - services:
+        - vscode
+      env:
+        CODEBUDDY_DISABLE_HOST_VALIDATION: "1"
   web_trigger_sync_upstream: &sync_upstream
     - docker:
         image: golang:1.26.10
