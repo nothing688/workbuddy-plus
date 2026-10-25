@@ -14,6 +14,10 @@ let groupsData = [], accGroupFilter = null, metaUID = null;
    轮询更新徽章但绝不动用户手动选的筛选。 */
 let activePool = null, poolGroups = [], activePoolReady = false;
 const probeBusy = Object.create(null), probeResult = Object.create(null);
+/* 账号池多选：按 uid 存集合而不是读 DOM。账号表每 5s 由轮询重建 tbody，
+   勾选状态必须活在 DOM 之外才能在重绘后按住 uid 恢复；切换分组筛选 / 切换调用池
+   时清空，避免把上一个范围里的号一起批量改。 */
+const accSel = new Set();
 /* 「全部测试」运行中标记：模块级，切页 / 5s 轮询都不会清它；重复点击靠它兜住。 */
 let probeAllRunning = false;
 let logPin = true, loginState = null, loginTimer = null;
@@ -476,10 +480,11 @@ setTimeout(() => {
 function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="big">' +
+    tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="big">' +
       (filtered ? '该分组下还没有账号' : '账号池是空的') + '</div>' +
       (filtered ? '换一个分组，或点账号行上的分组徽章调整归属' : '点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') +
       '</div></td></tr>';
+    syncAccSelHead(list);
     return;
   }
   const pb = (probe && probe.busy) || {};
@@ -570,7 +575,7 @@ function renderAccounts(list, filtered, probe) {
     let probeRow = '';
     if (pr) {
       const lat = formatLatency(pr.latency_ms);
-      probeRow = '<tr class="probe-row"><td colspan="10"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
+      probeRow = '<tr class="probe-row"><td colspan="11"><div class="probe-line ' + (pr.ok ? 'ok' : 'bad') + '">' +
         (pr.ok
           ? '<span class="tag ok">可用' + (lat === '—' ? '' : ' · ' + esc(lat)) + '</span>'
           : '<span class="tag bad">不可用</span><span>' + esc(pr.error || '测试失败（无错误信息）') + '</span>') +
@@ -578,7 +583,12 @@ function renderAccounts(list, filtered, probe) {
         (pr.ok && pr.reply ? '<details class="probe-reply"><summary>查看回复</summary><div class="body">' + esc(pr.reply) + '</div></details>' : '') +
         '</div></td></tr>';
     }
-    return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
+    // 勾选按 uid 从模块级集合恢复：5s 轮询重建 tbody 后选中行不会掉。
+    // 顶层单测沙箱里没有 accSel（只切这一段求值），typeof 兜底成未选中。
+    const picked = typeof accSel !== 'undefined' && accSel.has(s.uid);
+    return '<tr class="' + cls + (picked ? ' sel' : '') + '" title="uid: ' + esc(s.uid) + '">' +
+      '<td class="pick"><input type="checkbox" class="row-pick" data-u="' + esc(s.uid) + '"' +
+        (picked ? ' checked' : '') + ' title="选择该账号（可批量移动分组）" aria-label="选择该账号"></td>' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
       '<td class="who"><div class="nm">' + nameCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td class="grp-cell">' + grpCell + '</td>' +
@@ -622,14 +632,47 @@ function renderAccounts(list, filtered, probe) {
       ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
       '</div></td></tr>' + probeRow;
   }).join('');
+  syncAccSelHead(list);
+}
+
+// syncAccSelHead 同步表头全选框的三态与工具栏：范围只算当前渲染的 list，
+// 所以「全选」永远只勾当前筛选范围内的账号，部分勾选时表头显示 indeterminate。
+function syncAccSelHead(list) {
+  const box = $('accSelAll');
+  if (box && typeof accSel !== 'undefined') {
+    const uids = (list || []).map(a => a && a.uid).filter(Boolean);
+    const picked = uids.filter(u => accSel.has(u)).length;
+    box.checked = uids.length > 0 && picked === uids.length;
+    box.indeterminate = picked > 0 && picked < uids.length;
+    box.disabled = uids.length === 0;
+  }
+  syncAccSelBar();
+}
+
+// syncAccSelBar 工具栏随勾选数量显隐；0 个时整块隐藏（不占位、不可误点）。
+function syncAccSelBar() {
+  const bar = $('accSelBar');
+  if (!bar) return;
+  const n = typeof accSel === 'undefined' ? 0 : accSel.size;
+  bar.hidden = n === 0;
+  const cnt = $('accSelCount');
+  if (cnt) cnt.textContent = '已选 ' + n + ' 个';
+  const mv = $('btnAccMove');
+  if (mv) mv.disabled = n === 0;
+}
+
+// accVisibleList 当前筛选范围内的账号。全选、表头三态、批量移动都用同一口径，
+// 避免「看到 10 行、实际勾了整池 200 个」。
+function accVisibleList() {
+  const all = (overviewData && overviewData.accounts) || [];
+  return accGroupFilter == null ? all
+    : all.filter(a => a && String(a.group == null ? '' : a.group) === accGroupFilter);
 }
 
 // paintAccounts 统一出口：先按 accGroupFilter 过滤，再把测试状态一起交给 renderAccounts。
 // 所有重渲染（5s 轮询 / 切分组 / 测试结束）都走这里，避免某条路径漏传状态导致结果闪回。
 function paintAccounts() {
-  const all = (overviewData && overviewData.accounts) || [];
-  const list = accGroupFilter == null ? all
-    : all.filter(a => a && String(a.group == null ? '' : a.group) === accGroupFilter);
+  const list = accVisibleList();
   renderAccounts(list, accGroupFilter != null, { busy: probeBusy, res: probeResult });
 }
 
@@ -872,24 +915,41 @@ function openMeta(uid, field) {
 }
 
 /* ── 移动到其他分组 ────────────────────────────────────────────────
-   点账号行的分组徽章直接选目标组：切组不改调用池（active group 要显式切换），
-   只改这个账号的归属；保存走 partial meta（只传 group，不动名称备注）。 */
-let grpMoveUID = null;
-function openGroupPicker(uid) {
-  grpMoveUID = uid;
-  const acc = acctStateOf(uid) || {};
-  const cur = String(acc.group == null ? '' : acc.group);
-  $('grpWho').textContent = (acc.nickname || '未命名') + ' · ' + String(uid);
-  $('grpErr').hidden = true;
-  $('grpNew').value = '';
-  // 候选 = 现有分组去掉当前组；始终给「未分组」，并保留当前组标记
-  const names = (groupsData || []).map(g => String(g.name || '')).filter(n => n !== cur);
-  const chips = names.map(n =>
-    '<button class="xs ghost grp-pick" data-g="' + esc(n) + '">' + (n ? esc(n) : '未分组') + '</button>');
+   两种入口共用同一个弹框：
+   · 单账号：点账号行的分组徽章 → 只改该账号归属，切组不影响调用池（active group 要显式切换）；
+   · 批量：工具栏「移动到分组」→ 整批调 /accounts/meta_batch，成功后清空选择。
+   两者都只改分组，不动名称备注。 */
+let grpMoveUID = null, grpBatch = false;
+function openGroupPicker(uid, batch) {
+  grpBatch = !!batch;
+  grpMoveUID = grpBatch ? null : uid;
+  const n = grpBatch ? accSel.size : 0;
+  if (grpBatch && !n) { grpBatch = false; toast('先在账号表勾选要移动的账号', 'warn'); return; }
+  const acc = grpBatch ? null : (acctStateOf(uid) || {});
+  const cur = grpBatch ? '' : String(acc.group == null ? '' : acc.group);
+  if ($('grpTitle')) $('grpTitle').textContent = grpBatch ? '移动 ' + n + ' 个账号' : '移动到分组';
+  if ($('grpWho')) {
+    $('grpWho').textContent = grpBatch
+      ? '已选 ' + n + ' 个账号 · 当前范围：' + (accGroupFilter == null ? '全部分组' : (accGroupFilter || '未分组'))
+      : (acc.nickname || '未命名') + ' · ' + String(uid);
+  }
+  if ($('grpErr')) $('grpErr').hidden = true;
+  if ($('grpNew')) $('grpNew').value = '';
+  // 候选 = 现有分组；单账号模式去掉当前组（点它没意义），批量模式全保留并补「未分组」。
+  let names = (groupsData || []).map(g => String(g.name || ''));
+  if (grpBatch) {
+    if (names.indexOf('') < 0) names.push(''); // 未分组永远可选（= 整批移出分组）
+  } else {
+    names = names.filter(x => x !== cur);
+  }
+  names = names.filter((x, i) => names.indexOf(x) === i);
+  const chips = names.map(nm =>
+    '<button class="xs ghost grp-pick" data-g="' + esc(nm) + '">' + (nm ? esc(nm) : '未分组') + '</button>');
   $('grpList').innerHTML = chips.length ? chips.join('') : '<span class="hint">暂无其他分组</span>';
   $('grpVeil').classList.add('on');
 }
 async function moveGroupTo(name) {
+  if (grpBatch) return moveGroupBatch(name);
   const uid = grpMoveUID;
   if (!uid) return;
   const err = $('grpErr');
@@ -909,6 +969,33 @@ async function moveGroupTo(name) {
     err.hidden = false;
   }
 }
+// moveGroupBatch 整批移动：一次 POST meta_batch（uids 上限由后端校验），
+// 成功后清空选择并刷新列表 + 分组计数；missing 非空说明部分 uid 已不存在，
+// 用 warn 色提示，但不当作失败（其余账号确实已移动）。
+async function moveGroupBatch(name) {
+  const uids = Array.from(accSel);
+  const err = $('grpErr');
+  if (err) err.hidden = true;
+  if (!uids.length) { toast('没有已选账号', 'warn'); return; }
+  try {
+    const r = await api('accounts/meta_batch', {
+      method: 'POST',
+      body: JSON.stringify({ uids, group: name || '' }),
+    });
+    const moved = r && typeof r.updated === 'number' ? r.updated : uids.length;
+    const missing = r && Array.isArray(r.missing) ? r.missing : [];
+    $('grpVeil').classList.remove('on');
+    grpBatch = false;
+    let msg = '已移动 ' + moved + ' 个账号到 ' + (name || '未分组');
+    if (missing.length) msg += '（' + missing.length + ' 个账号不存在）';
+    toast(msg, missing.length ? 'warn' : 'ok');
+    accSel.clear();
+    await loadOverview(true);
+    await loadGroups();
+  } catch (e) {
+    if (err) { err.textContent = e.message; err.hidden = false; }
+  }
+}
 // 单测的 DOM 桩只提供部分元素：绑定处逐个判空，避免顶层求值抛错。
 if ($('grpList')) {
   $('grpList').addEventListener('click', ev => {
@@ -917,7 +1004,10 @@ if ($('grpList')) {
     moveGroupTo(b.dataset.g);
   });
 }
-if ($('btnGrpCancel')) $('btnGrpCancel').onclick = () => $('grpVeil').classList.remove('on');
+if ($('btnGrpCancel')) $('btnGrpCancel').onclick = () => {
+  $('grpVeil').classList.remove('on');
+  grpBatch = false; grpMoveUID = null;
+};
 if ($('btnGrpSave')) $('btnGrpSave').onclick = () => {
   const v = ($('grpNew').value || '').trim();
   if (!v) { moveGroupTo(''); return; }
@@ -1072,11 +1162,40 @@ $('accBody').addEventListener('click', async ev => {
   }
 });
 
+/* ── 多选 / 批量移动 ────────────────────────────────────────────────
+   勾选只改模块级 Set，不重建整表（重建会打断连续点选）；行高亮与表头三态
+   就地同步。全选只作用于当前筛选范围，表头半选态表示「范围内部分勾选」。 */
+$('accBody').addEventListener('change', ev => {
+  const c = ev.target.closest('input.row-pick');
+  if (!c) return;
+  const u = c.dataset.u;
+  if (!u) return;
+  if (c.checked) accSel.add(u); else accSel.delete(u);
+  const tr = c.closest('tr');
+  if (tr) tr.classList.toggle('sel', c.checked);
+  syncAccSelHead(accVisibleList());
+});
+if ($('accSelAll')) {
+  $('accSelAll').addEventListener('change', ev => {
+    const on = !!ev.target.checked;
+    for (const a of accVisibleList()) {
+      if (!a || !a.uid) continue;
+      if (on) accSel.add(a.uid); else accSel.delete(a.uid);
+    }
+    // 一次重绘把勾选/高亮/表头态全部对齐（数据已在内存，不发请求）。
+    paintAccounts();
+  });
+}
+if ($('btnAccMove')) $('btnAccMove').onclick = () => openGroupPicker(null, true);
+if ($('btnAccSelClear')) $('btnAccSelClear').onclick = () => { accSel.clear(); paintAccounts(); };
+
 /* ── 分组筛选 / 分组备注 ──────────────────────────────────────────── */
 $('accGroupFilter').onchange = () => {
   const v = $('accGroupFilter').value;
   // 哨兵翻回内部表示：'__all__' = 不筛，'__none__' = 空分组名（未分组）。
   accGroupFilter = v === '__all__' ? null : (v === '__none__' ? '' : v);
+  // 换范围即清空选择：上一个分组里勾的号在眼前已经看不见，留着会被误批量改。
+  accSel.clear();
   paintAccounts();
   if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
 };
@@ -1098,7 +1217,9 @@ $('btnPoolActive').onclick = async () => {
     renderPoolActive();
     // 切换成功 → 列表筛选自动跟到该池（方便立刻看状态）。这只是查看范围，
     // 路由已经由服务端 active_group 决定；用户随后手动改筛选不会改变路由。
+    // 范围变了就清空多选，避免把旧池里勾的号带过去批量改。
     accGroupFilter = activePool ? activePool : null;
+    accSel.clear();
     renderGroupFilter();
     paintAccounts();
     toast('调用池已切换为 ' + poolLabel(activePool), 'ok');
