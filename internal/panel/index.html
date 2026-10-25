@@ -1127,8 +1127,19 @@ input::placeholder { color: var(--ink-3); }
   table.acc { display: table; overflow: visible; white-space: nowrap; }
 }
 
-/* 行内操作恢复为原版按钮集合：两行四列，每个按钮保持正常尺寸 */
-.acts-inner { grid-template-columns: repeat(4, 50px); gap: 4px; }
+
+/* 恢复原版单行操作按钮：7 个动作并排，靠收窄列距与按钮内边距塞进整行 */
+.acts-inner {
+  grid-template-columns: 42px 42px 42px 42px 54px 42px 42px;
+  gap: 3px;
+}
+.acts-inner button { font-size: 11.5px; padding: 0 1px; height: 25px; }
+.who { max-width: 148px; }
+.acc th:nth-child(5), .acc td:nth-child(5) { min-width: 130px; }
+.usage-cell { min-width: 168px; }
+.usage-line { font-size: 11px; gap: 2px; }
+.usage-item { padding: 2px 3px; }
+.acc th, .acc td { padding: 9px 5px; }
 </style>
 </head>
 <body>
