@@ -1302,9 +1302,17 @@ const ML_STATE = { locked: ['bad', '全池锁定'], starved: ['warn', '此刻无
 function renderModelLocks(rows) {
   const tb = $('mlBody');
   const list = Array.isArray(rows) ? rows : [];
-  $('mlNote').textContent = list.length ? list.length + ' 个模型受限' : '';
+  // 锁池现在按「查看分组」统计；把范围写在标题旁，避免误以为还是全池。
+  const grouped = typeof accGroupFilter !== 'undefined' && accGroupFilter != null;
+  const scope = grouped ? (accGroupFilter || '未分组') : '';
+  $('mlNote').textContent = list.length
+    ? list.length + ' 个模型受限' + (scope ? ' · ' + scope : '')
+    : (scope ? scope + '：无模型受限' : '');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="8"><div class="empty">当前没有模型级限流 —— 所有模型均可选</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="8"><div class="empty">' +
+      (scope ? '当前分组（' + esc(scope) + '）没有模型级限流 —— 该分组所有模型均可选'
+             : '当前没有模型级限流 —— 所有模型均可选') +
+      '</div></td></tr>';
     return;
   }
   tb.innerHTML = list.map(r => {
@@ -1362,9 +1370,16 @@ if (typeof window !== 'undefined' && window.addEventListener) {
   });
 }
 
+// overviewPath 带上当前分组：模型锁池要按查看范围统计，而不是永远全池。
+// 全部分组不传 group；未分组传 group= 空串（后端用 Query().Has 区分）。
+function overviewPath() {
+  if (typeof accGroupFilter === 'undefined' || accGroupFilter == null) return 'overview';
+  return 'overview?group=' + encodeURIComponent(accGroupFilter);
+}
+
 async function loadOverview(quiet) {
   try {
-    const d = await api('overview');
+    const d = await api(overviewPath());
     overviewData = d;
     const accs = d.accounts || [];
     // 「可用」要和测试结论一致：本轮测试判死的号从顶部计数里扣掉，否则上面写可用、
@@ -1703,6 +1718,8 @@ if ($('poolActiveSelect')) $('poolActiveSelect').onchange = () => {
   accSel.clear();
   paintAccounts();
   if ($('accGroupCounts')) $('accGroupCounts').textContent = groupCountText();
+  // 模型锁池的口径跟着查看分组走：换组后立刻重取，不等 5s 轮询。
+  loadOverview(true);
 };
 
 /* ── 当前调用池（默认选号组）────────────────────────────────────────
@@ -2916,9 +2933,10 @@ function refreshVisible() {
     renderCompensation();
   }
 }
-function start() {
-  // 先读默认调用池再拉账号：首次加载的筛选才能直接落在当前池上。
-  loadPoolActive();
+async function start() {
+  // 先读默认调用池再拉账号：首次加载的筛选才能直接落在当前池上，
+  // 模型锁池的 ?group= 也才能在第一次 overview 就带对。
+  await loadPoolActive();
   loadOverview(true);
   loadGroups();
   if (refTimer) clearInterval(refTimer);

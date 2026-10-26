@@ -39,6 +39,7 @@ type ModelLockRow struct {
 }
 
 // ModelLockView 汇总当前所有「有未过期模型级限流」的 (域, 模型)，按不可用优先排序。
+// 统计范围是全池；只看某个分组请用 ModelLockViewForGroup。
 //
 // 口径与选号/ModelBlocked 严格一致，三处易错点：
 //   - 只看**参与选号**的账号：disabled / paused 号跳过——它们的不可用与模型无关，
@@ -48,9 +49,23 @@ type ModelLockRow struct {
 //
 // 只读：持 RLock 遍历。无锁时返回 nil（JSON 里是 null，面板按空态渲染）。
 func (p *Pool) ModelLockView() []ModelLockRow {
+	return p.modelLockView(nil)
+}
+
+// ModelLockViewForGroup 同 ModelLockView，但只统计指定分组的账号。
+// group 为空串表示「未分组」，不是全部分组——要全部分组请调用 ModelLockView。
+func (p *Pool) ModelLockViewForGroup(group string) []ModelLockRow {
+	return p.modelLockView(&group)
+}
+
+// modelLockView group=nil 表示全池；非 nil 时只统计 e.group == *group 的账号。
+func (p *Pool) modelLockView(group *string) []ModelLockRow {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := time.Now()
+	inGroup := func(e *entry) bool {
+		return group == nil || e.group == *group
+	}
 
 	type agg struct {
 		locked   int
@@ -62,7 +77,7 @@ func (p *Pool) ModelLockView() []ModelLockRow {
 	routable := make(map[string]int) // realm → 参与选号的账号数
 
 	for _, e := range p.byUID {
-		if e.disabled || e.paused {
+		if e.disabled || e.paused || !inGroup(e) {
 			continue
 		}
 		realm := e.a.Realm()
@@ -107,7 +122,7 @@ func (p *Pool) ModelLockView() []ModelLockRow {
 		// ponytail: 每行重扫全池（O(行×号)）。20 个号无所谓；号数上百且行多再把
 		// 每域的 healthyForModel/inFlightFull 结果先算一次复用。
 		for _, e := range p.byUID {
-			if e.a.Realm() != realm {
+			if e.a.Realm() != realm || !inGroup(e) {
 				continue
 			}
 			if e.healthyForModel(now, model) && !p.inFlightFull(e) {

@@ -248,7 +248,7 @@ func TestAppJSOverviewWiresModelLocks(t *testing.T) {
 const vm = require('vm');
 const assert = require('assert');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('async function loadOverview(');
+const start = src.indexOf('function overviewPath');
 const end = src.indexOf("$('accBody').addEventListener");
 assert.ok(start >= 0 && end > start, 'loadOverview not found');
 const inert = new Proxy(function () {}, {
@@ -276,5 +276,50 @@ vm.runInContext(src.slice(start, end) + '\nthis.loadOverview = loadOverview;', c
 	}
 	if out, err := exec.Command(node, path, "app.js").CombinedOutput(); err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
+	}
+}
+
+// TestOverviewModelLocksFilteredByGroup 模型锁池按 ?group= 统计：
+// 只算该分组参与选号的账号，分母/锁号/可服务数一起收窄；不带参数仍是全池。
+func TestOverviewModelLocksFilteredByGroup(t *testing.T) {
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at1"})
+	p.Add(&auth.Auth{UID: "u2", AccessToken: "at2"})
+	p.Add(&auth.Auth{UID: "u3", AccessToken: "at3"})
+	p.SetMeta("u1", "A", "")
+	p.SetMeta("u2", "A", "")
+	p.SetMeta("u3", "B", "")
+	p.CooldownSoftForModel("u1", 10*time.Minute, time.Time{}, "glm-5.3", "model rate limit")
+
+	pn := New(Config{Version: "test", Pool: p})
+	read := func(q string) []map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/panel/api/overview"+q, nil)
+		pn.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("overview%s code=%d body=%s", q, rec.Code, rec.Body.String())
+		}
+		var d struct {
+			ModelLocks []map[string]any `json:"model_locks"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.ModelLocks
+	}
+
+	rows := read("?group=A")
+	if len(rows) != 1 || rows[0]["total"] != float64(2) || rows[0]["locked"] != float64(1) || rows[0]["state"] != "partial" {
+		t.Fatalf("group A=%+v，want 一行 partial total=2 locked=1", rows)
+	}
+	if rows := read("?group=B"); len(rows) != 0 {
+		t.Fatalf("group B 无锁应为空，得到 %+v", rows)
+	}
+	if rows := read("?group="); len(rows) != 0 {
+		t.Fatalf("未分组应无锁，得到 %+v", rows)
+	}
+	if rows := read(""); len(rows) != 1 || rows[0]["total"] != float64(3) {
+		t.Fatalf("全池=%+v，want total=3", rows)
 	}
 }

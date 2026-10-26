@@ -228,3 +228,30 @@ func TestModelLockViewUnlockAfterExpiry(t *testing.T) {
 		t.Fatalf("解锁后应回落 nil，得到 %+v", rows)
 	}
 }
+
+// TestModelLockViewForGroup 按分组统计：分母/锁号/可服务数都只算该组账号；
+// 其它分组没有锁时返回 nil，而不是把全池的行带出来。
+func TestModelLockViewForGroup(t *testing.T) {
+	p := lockViewPool(t)
+	if !p.SetMeta("u1", "A", "") || !p.SetMeta("u2", "B", "") {
+		t.Fatal("SetMeta failed")
+	}
+	setModelCooldown(p, "u1", "glm-5.3", time.Now().Add(time.Hour), "6004 model rate limit", false)
+
+	rows := p.ModelLockViewForGroup("A")
+	if len(rows) != 1 {
+		t.Fatalf("group A rows=%+v，want 1", rows)
+	}
+	r := rows[0]
+	if r.Total != 1 || r.Locked != 1 || r.Servable != 0 || r.State != "locked" {
+		t.Fatalf("group A total/locked/servable/state = %d/%d/%d/%s，want 1/1/0/locked",
+			r.Total, r.Locked, r.Servable, r.State)
+	}
+	if rows := p.ModelLockViewForGroup("B"); rows != nil {
+		t.Fatalf("group B 无锁应返回 nil，得到 %+v", rows)
+	}
+	// 全池口径不受影响。
+	if all := p.ModelLockView(); len(all) != 1 || all[0].Total != 2 || all[0].Locked != 1 {
+		t.Fatalf("all=%+v，want total=2 locked=1", all)
+	}
+}

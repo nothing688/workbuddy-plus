@@ -380,14 +380,24 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		// 模型降级路由表：前端据它标注「⤳ 已路由至 X」（限流的模型若配了等价模型）。
 		"model_fallback": p.modelFallbackSnapshot(),
 		"accounts":       p.cfg.Pool.List(),
-		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久，移植上游
-		// PR #120）：与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
-		"model_locks": p.cfg.Pool.ModelLockView(),
+		// model_locks 模型级限流清单（哪些模型不能用、锁了几个号、还要锁多久）。
+		// ?group= 存在时只统计该分组（group= 空串 = 未分组）；不存在 = 全池。
+		"model_locks": p.modelLockRows(r),
 		// 到期提醒快照的节奏与年龄：界面轮询是 5 秒级，但卡片数据只随余额后台刷新
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
 		"balance_refresh_sec":  p.balanceRefreshSec(),
 		"balance_refreshed_at": p.balanceRefreshedAt(),
 	})
+}
+
+// modelLockRows 按 URL 的 group 参数选择锁池统计范围。
+// 用 Query().Has 区分「没传 group（全池）」与「group= 空串（未分组）」。
+func (p *Panel) modelLockRows(r *http.Request) []pool.ModelLockRow {
+	q := r.URL.Query()
+	if !q.Has("group") {
+		return p.cfg.Pool.ModelLockView()
+	}
+	return p.cfg.Pool.ModelLockViewForGroup(q.Get("group"))
 }
 
 // balanceRefreshSec 余额后台刷新间隔（秒）；无调度器/未开启时为 0。
