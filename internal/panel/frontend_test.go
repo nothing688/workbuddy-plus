@@ -2218,3 +2218,73 @@ process.stdout.write(JSON.stringify({
 		t.Fatalf("account filters=%s want %s", out, want)
 	}
 }
+
+// 账号表排序：数值列降序在先、文本/状态升序在先、同值按 UID 稳定，且不限量账号
+// 的积分视为最大值；表头三态（升/降/默认）由 toggleAccSort 维护。
+func TestAppJSAccountSort(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; account sort test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function accStatusOf');
+const end = src.indexOf('function syncAccSortHead');
+if (start < 0 || end < 0) throw new Error('sort helpers not found');
+const ctx = { Date: Date };
+vm.createContext(ctx);
+vm.runInContext("'use strict';\nvar accSort = { key: '', dir: 1 };\n" + src.slice(start, end) +
+  '\nthis.applyAccSort=applyAccSort; this.accSortVal=accSortVal; this.accSortDefaultDir=accSortDefaultDir;' +
+  '\nthis.getSort=function(){return accSort}; this.setSort=function(k,d){accSort={key:k,dir:d}};', ctx);
+const rows = [
+  { uid: 'b', credits: 10, credits_total: 20 },
+  { uid: 'a', credits: 5, credits_total: 50 },
+  { uid: 'c', credits: 0, credits_total: -1 },
+  { uid: 'd', credits: 5, credits_total: 50, disabled: true },
+];
+ctx.setSort('credits', -1);
+const credits = ctx.applyAccSort(rows).map(r => r.uid).join(',');
+ctx.setSort('status', 1);
+const status = ctx.applyAccSort(rows).map(r => r.uid).join(',');
+ctx.setSort('', 1);
+const plain = ctx.applyAccSort(rows).map(r => r.uid).join(',');
+process.stdout.write(JSON.stringify({
+  credits: credits,
+  status: status,
+  plain: plain,
+  dirs: [ctx.accSortDefaultDir('who'), ctx.accSortDefaultDir('status'), ctx.accSortDefaultDir('credits'), ctx.accSortDefaultDir('last')]
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "account-sort-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("account sort node test failed: %v\n%s", err, out)
+	}
+	// credits 降序：不限量(c, MAX) → 10(b) → 5(a,d) 同值按 UID → 5(a) 在 5(d) 前
+	// status 升序：禁用(d) → 可用(a,b,c 同 UID 序)
+	// 默认：保持传入顺序
+	const want = `{"credits":"c,b,a,d","status":"d,a,b,c","plain":"b,a,c,d","dirs":[1,1,-1,-1]}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("account sort=%s want %s", out, want)
+	}
+}
+
+// 表头必须是可排序入口（data-sort + aria-sort），否则上面的排序逻辑没有触发点。
+func TestAccountTableSortHeaders(t *testing.T) {
+	body := string(indexHTML)
+	for _, key := range []string{"who", "status", "credits", "fails", "inflight", "usage", "last"} {
+		if !strings.Contains(body, `data-sort="`+key+`"`) {
+			t.Errorf("账号表缺少可排序表头 data-sort=%q", key)
+		}
+	}
+	if !strings.Contains(body, `id="accTable"`) {
+		t.Fatal("找不到账号表 accTable")
+	}
+}

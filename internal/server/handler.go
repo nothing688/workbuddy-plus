@@ -217,6 +217,7 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /v1/capacity", h.withAuth(h.capacity))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
+	h.mux.HandleFunc("GET /livez", h.livez)
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}
@@ -345,6 +346,24 @@ func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 		"total":          total,
 		"service":        ServiceName,
 		"realm_servable": realmServable,
+	})
+}
+
+// livez 进程存活探针：只证明 HTTP 服务在响应，不判断账号池是否可服务。
+//
+// 与 /healthz 的分工：
+//   - /healthz 是「现在能不能接流量」——池里没有可用账号、全在途占满时返回 503，
+//     给负载均衡/服务发现用；
+//   - /livez 是「进程还活着」——恒定 200，给容器 HEALTHCHECK / 编排重启策略用。
+//
+// 为什么需要：Dockerfile 的 HEALTHCHECK 原先是打 /healthz，于是空池（尚未导入账号）
+// 或全池冷却时容器一直显示 unhealthy，watchtower / 编排可能因此反复重建容器，
+// 而这跟进程健康毫无关系。
+func (h *Handler) livez(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Service", ServiceName)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"service": ServiceName,
 	})
 }
 

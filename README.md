@@ -805,7 +805,7 @@ http://127.0.0.1:7863/panel/
 
 | 视图 | 功能 |
 |---|---|
-| **账号池** | 顶部 7 张统计卡（总数 / 可用 / 积分剩余与总额 / 粘性会话 / 冷却 / 暂停选号 / 禁用，上四下三，积分随位数自动让宽）+ 账号表：状态标签（可用 / 限流冷却 / 积分冷却 / 熔断 / 已禁用 / 测试不可用）与**第二行的具体原因和状态码**（如 `[HTTP 403] [11140] 账号存在异常行为`）、积分量条、成功失败计数、在途、单号操作（签到 / 余额 / 任务 / 测试 / 解冻 / 暂停 / 禁用 / 移除）；分组徽章与筛选、多选批量移动、批量「全部签到 / 旅行巡检 / 活跃上报 / 全部保活」。可用性测试结果走右下浮窗，自动消失、悬停暂停。账号表支持关键词（备注 / 昵称 / uid）与状态（可用 / 冷却异常 / 暂停 / 禁用）本地筛选；多选可批量禁用 / 暂停 / 解冻 / 移除 / 导出。测试默认先用两域通用的免费短名 `hy3`，被上游按「模型级」拒绝（11102 / 11158 / 14401 / 6004 / 14003）时再按账号目录换模型，不会把「某个模型不可用」误判成「账号不可用」；显式传入 `model` 则只测该模型 |
+| **账号池** | 顶部 7 张统计卡（总数 / 可用 / 积分剩余与总额 / 粘性会话 / 冷却 / 暂停选号 / 禁用，上四下三，积分随位数自动让宽）+ 账号表：状态标签（可用 / 限流冷却 / 积分冷却 / 熔断 / 已禁用 / 测试不可用）与**第二行的具体原因和状态码**（如 `[HTTP 403] [11140] 账号存在异常行为`）、积分量条、成功失败计数、在途、单号操作（签到 / 余额 / 任务 / 测试 / 解冻 / 暂停 / 禁用 / 移除）；分组徽章与筛选、多选批量移动、批量「全部签到 / 旅行巡检 / 活跃上报 / 全部保活」。可用性测试结果走右下浮窗，自动消失、悬停暂停。账号表支持关键词（备注 / 昵称 / uid）与状态（可用 / 冷却异常 / 暂停 / 禁用）本地筛选（点顶部统计卡也能直接筛选该状态）；表头可点击按 账号 / 状态 / 积分 / 成功失败 / 在途 / 用量 / 最近成功 排序（升序 → 降序 → 默认三态循环，选择存 localStorage）；多选可批量禁用 / 暂停 / 解冻 / 移除 / 导出。「全部测试」运行中按钮变「停止」，可随时收手，已发出的请求跑完、未测账号保持原状。测试默认先用两域通用的免费短名 `hy3`，被上游按「模型级」拒绝（11102 / 11158 / 14401 / 6004 / 14003）时再按账号目录换模型，不会把「某个模型不可用」误判成「账号不可用」；显式传入 `model` 则只测该模型 |
 | **添加账号**（顶部按钮） | 浏览器内完成 OAuth 设备授权（显示授权链接 + 自动轮询），登录后凭证落盘并**热加载进池，免重启** |
 | **积分任务**（账号行内「任务」按钮） | 展示全部任务（进度 / 奖励分数与能量 / 状态）；「全部接受」批量报名；「一键完成」覆盖 **17 个任务**（推进进度 + 异步计分等待 + **自动领奖**，幂等可重复点）；其余任务展示操作指引 |
 | **模型与档位** | 实时查询上游：每模型的积分倍率、默认思考档、支持的档位（含「off（可关）」）、上下文长度与最大输出；若存在探测数据，最大输出列显示**实测上限与钳制告警**（见「探测模型真实输出上限」）。列表支持**按条件查询**：关键词（ID / 名称 / 描述 / 厂商，空格分词 AND）、域（CN / Global）、能力（工具 / 视觉 / 思考 / 默认）、思考档位、价格（折扣 / 限时免费 / 打折），以及按倍率、上下文、最大输出、ID 排序。**出图模型的倍率另有口径**：真实单价在每次出图回执 `usage.credit` 里，上游目录对出图模型**已基本不再报牌价**——CN `hunyuan-image-alpha` 实扣固定 **5.71/张**（与尺寸、画质、`n` 无关，回执带 `output_image_coefficient:1`），global `hy-image-3.5` 实扣固定 **0.27/张**（low/medium/high × 512/1024/1536 六档同价；回执恒 `output_image_tokens:15000` 但不带 coefficient——**token 数不代表单价**，按 token 反推价格会算错）。旧 global `gpt-image-2.5-sunburst` 已下架（`400 code=14401 route config not found`），不再列出。**目录拉取账号**：健康号优先；全池禁用/冷却时用这些号兜底（只读、不解冻），响应里的 `catalog_sources` 与 `warnings` 会标明目录来自禁用号。**可用性标签**按模型锁与最近真实请求合成（CN / Global 同口径）：无证据显示「待验证」，不要把「上游目录里有」当成「当前账号有权限」。每行末尾的「验证」按钮会真实发一条 `max_tokens=16` 的对话，确认该模型此刻能否调通（消耗少量额度，结果只在本页展示）。面板因此把「牌价」与「实扣」分列，并按尺寸×画质分档显示（`charge_variants`），不用均值互相覆盖 |
@@ -828,7 +828,9 @@ http://127.0.0.1:7863/panel/
 
 面板后端接口挂在 `/panel/api/*`（同一 Bearer 鉴权），可脚本化调用；账号运维操作均落到池既有入口（`Revive`/`Disable`/`Remove` 等），与 `/status` 观测口径一致。
 
-**安全响应头**：面板页面与全部 `/panel/api/*` 响应统一带 `Content-Security-Policy`（`default-src 'none'`，脚本仅同源，`frame-ancestors 'none'` 禁嵌套）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer` 等；前端脚本独立为同源 `app.js`，不含内联脚本与内联事件处理器。
+**安全响应头**：面板页面与全部 `/panel/api/*` 响应统一带 `Content-Security-Policy`（`default-src 'none'`，脚本仅同源，`frame-ancestors 'none'` 禁嵌套）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Robots-Tag: noindex` 等；前端脚本独立为同源 `app.js`，不含内联脚本与内联事件处理器。
+
+**传输优化**：面板的 HTML / JS / JSON 响应在客户端声明 `Accept-Encoding: gzip` 时自动压缩（`app.js` 约 310KB → 110KB），字体等已压缩资源跳过；`app.js` / `theme.js` 的 URL 带内容指纹，指纹匹配时给一年 `immutable` 缓存，配不到指纹仍是 `no-store`（防旧脚本）。
 
 **鉴权实现**：`internal/httpauth` 统一 server 与 panel 的 Bearer 校验，使用 SHA-256 摘要 + `subtle.ConstantTimeCompare` 常量时间比较（避免逐字节比较泄露密钥信息）；上游返回的 `uid` 经白名单校验（`[A-Za-z0-9_-]`，长度 ≤64）后才用于拼凭证文件名，防止路径穿越。
 
@@ -844,13 +846,14 @@ http://127.0.0.1:7863/panel/
 | `GET /v1/responses` | Bearer（`api_key` 非空时） | 固定回 **426 Upgrade Required**（带 `Upgrade: websocket`）。Codex 客户端在 `supports_websockets`/`prefer_websockets` 下会先探 WS 升级，426 是它**立刻且粘性**回落 HTTPS 的信号；否则它要空转 `stream_max_retries` 次才回落（日志里的 `Reconnecting… n/5`）。本网关不保存 `previous_response_id` / 连接内状态，WS 复用无从谈起 |
 | `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 1h；失败返回空列表 + 5min 负缓存）；**国际版（global）目录以官方桌面端 UA 族为准**——只有该族下发的模型进目录，IDE/CLI 族与企业端点只用来补同 id 的 context/efforts/倍率等字段（issue #216：另两族的独有模型实测在 chat 端点回 11102，列出来只会让客户端选到死模型）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |
 | `GET /status` | Bearer（`api_key` 非空时） | 账号状态汇总 + 每账号详情（积分/冷却/熔断/在途/粘性）+ `model_locks`（模型级限流全清单，无锁为 null） |
-| `GET /healthz` | 无 | 健康检查：有 healthy 且未占满账号返回 200，否则 503；响应带身份标识（见下） |
+| `GET /healthz` | 无 | 容量健康检查：有 healthy 且未占满账号返回 200，否则 503；响应带身份标识（见下） |
+| `GET /livez` | 无 | 进程存活探针：只要 HTTP 服务能响应就返回 200，不判断账号池；给容器 `HEALTHCHECK` / 编排重启策略用，避免空池或全池冷却被误判成进程故障 |
 | `GET /metrics` | Bearer（`metrics.enabled` 时才存在） | Prometheus 文本。缺省不注册 |
 | `POST /admin/tasks/{name}/run` | Bearer（`admin.enabled` 时才存在） | 立刻补跑 `checkin` / `activity` / `keepalive` / `travel` / `blackcat`，202，同名在跑则 409 |
 
 成功的 chat 响应带 `X-Wb-Account`（实际应答账号的 uid）。`budget.daily_credit_limit` 大于 0 时，当日已观测扣费到顶后 chat 回 429 `daily_budget_exceeded`。`schedule.jitter_minutes` 把排程从整点摊开，0 仍是整点。`admin.audit_enabled` 把 /admin 操作追加到 `admin.audit_file`。`alerting.enabled` 在健康账号数、熔断数或 WAF 拦截越界时 POST webhook。这四项改完要重启；`budget.daily_credit_limit` 和 `jitter_minutes` 保存后即生效。
 
-> 鉴权规则：仅当 `api_key` 非空才校验 `Authorization: Bearer <api_key>`；**`api_key` 为空时上述端点直接放行**；`/healthz` 恒无鉴权。
+> 鉴权规则：仅当 `api_key` 非空才校验 `Authorization: Bearer <api_key>`；**`api_key` 为空时上述端点直接放行**；`/healthz` 与 `/livez` 恒无鉴权。
 
 `/healthz` 响应示例（200 / 503 同结构，仅状态码与计数变化）：
 
@@ -940,7 +943,8 @@ completion 的七到九成。
 - **wb2api**（主服务）、**signin_bin**、**login**、**credit** + 脚本（`login.sh` / `signin.sh` / `credit.sh` / `scripts/probe_active.py`）
 - 以 `app` 用户（uid 10001）运行，`app/auths` 与 `app/data` 预建
 - 镜像内默认落 `config.example.json` 作为空配置（不含密钥），生产用挂载卷覆盖 `/app/config.json`
-- 内置 `HEALTHCHECK`（`wget /healthz`，30s 间隔）
+- 内置 `HEALTHCHECK`（`wget /livez`，30s 间隔）：只看进程是否存活。`/healthz` 会因账号池暂无可用账号返回 503，那是容量状态，不该让容器被判成 unhealthy
+- 镜像构建支持 `--build-arg VERSION=...`（CI 自动注入 `sha-xxxxxxx` 或 tag），面板「维护」页显示真实运行版本；不注入则为 `dev`
 
 账号 / 数据通过 `docker-compose.yml` 卷挂载持久化：`./auths`、`./data`、`./config.json`。
 

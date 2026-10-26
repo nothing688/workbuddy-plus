@@ -73,11 +73,24 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
 
+      # 版本号：tag 构建用 tag（去掉 v），main/手动构建用 sha-xxxxxxx。
+      # 注入后面板显示真实版本，热更新比较也才有意义（镜像里恒为 dev 会永远提示有更新）。
+      - name: Resolve build version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

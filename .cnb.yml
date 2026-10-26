@@ -45,6 +45,7 @@ main:
           script: |
             IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
             docker build \
+              --build-arg VERSION="sha-${CNB_COMMIT_SHORT}" \
               -t "${IMAGE}:latest" \
               -t "${IMAGE}:sha-${CNB_COMMIT_SHORT}" \
               .

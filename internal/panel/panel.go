@@ -307,6 +307,14 @@ func (p *Panel) routes() {
 // 与 401 错误响应全都带上（API 也可能在浏览器里被直接打开）。
 func (p *Panel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
+	// 无论是否压缩都声明 Vary：同一 URL 的压缩/未压缩两种表示不能被缓存混用。
+	w.Header().Add("Vary", "Accept-Encoding")
+	if acceptsGzip(r) {
+		gw := &gzipResponseWriter{ResponseWriter: w}
+		defer gw.Close()
+		p.mux.ServeHTTP(gw, r)
+		return
+	}
 	p.mux.ServeHTTP(w, r)
 }
 

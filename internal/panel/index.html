@@ -225,6 +225,14 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .stat .v { font: 600 26px/1.15 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: nowrap; }
 .stat .k { color: var(--ink-3); font-size: 11.5px; margin-top: 5px; }
 .stat.good .v { color: var(--ok); } .stat.warn .v { color: var(--warn); } .stat.bad .v { color: var(--bad); }
+/* 可点击概况卡片：点一下把账号表筛到该状态（与工具栏状态下拉联动）。 */
+.stats .stat[data-status] { cursor: pointer; transition: background .12s, box-shadow .12s; }
+.stats .stat[data-status]:hover { background: var(--surface-2); }
+.stats .stat[data-status]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.stats .stat[data-status].filter-on {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
 
 /* ── 面板块 ───────────────────────────────────────────────────────── */
 .box { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden; }
@@ -1007,6 +1015,17 @@ body {
   background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   border-bottom: 1px solid var(--line);
 }
+/* 可排序表头：点击循环 升序 → 降序 → 默认（UID）顺序。 */
+.acc thead th.sortable { cursor: pointer; user-select: none; }
+.acc thead th.sortable:hover { color: var(--ink-2); }
+.acc thead th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.acc thead th.sortable::after {
+  content: ''; display: inline-block; width: 0; height: 0; margin-left: 4px;
+  vertical-align: 2px; opacity: 0;
+  border-left: 3px solid transparent; border-right: 3px solid transparent;
+}
+.acc thead th.sortable.asc::after { opacity: .6; border-bottom: 4px solid currentColor; }
+.acc thead th.sortable.desc::after { opacity: .6; border-top: 4px solid currentColor; }
 .acc td { padding: 10px 11px; }
 .acc tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
 .acc tbody tr:hover { background: var(--surface-2); }
@@ -1466,13 +1485,13 @@ input::placeholder { color: var(--ink-3); }
     <!-- 账号池 -->
     <section class="view" id="view-accounts">
       <div class="stats">
-        <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
-        <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
-        <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
-        <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
+        <div class="stat" data-status="all" role="button" tabindex="0" title="点击只看全部账号"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
+        <div class="stat good" data-status="healthy" role="button" tabindex="0" title="点击只看可用账号；再点取消筛选"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
+        <div class="stat warn" data-status="cooling" role="button" tabindex="0" title="点击只看冷却/异常账号；再点取消筛选"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
+        <div class="stat warn" data-status="paused" role="button" tabindex="0" title="点击只看暂停选号的账号；再点取消筛选"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
         <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分 剩余 / 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
-        <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
+        <div class="stat bad" data-status="disabled" role="button" tabindex="0" title="点击只看已禁用账号；再点取消筛选"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
       </div>
 
       <div class="box">
@@ -1531,8 +1550,14 @@ input::placeholder { color: var(--ink-3); }
           <thead><tr>
             <th class="pick"><input type="checkbox" id="accSelAll" title="全选当前筛选范围内的账号" aria-label="全选当前筛选范围内的账号"></th>
             <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>状态</th><th>积分</th>
-            <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
+            <th class="sortable" data-sort="who" tabindex="0" aria-sort="none">账号</th>
+            <th class="sortable" data-sort="status" tabindex="0" aria-sort="none">状态</th>
+            <th class="sortable" data-sort="credits" tabindex="0" aria-sort="none">积分</th>
+            <th class="sortable" data-sort="fails" tabindex="0" aria-sort="none">成功 / 失败</th>
+            <th class="sortable" data-sort="inflight" tabindex="0" aria-sort="none">在途</th>
+            <th class="sortable" data-sort="usage" tabindex="0" aria-sort="none">用量</th>
+            <th class="sortable" data-sort="last" tabindex="0" aria-sort="none">最近成功</th>
+            <th class="c-acts"></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
         </table>

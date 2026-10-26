@@ -28,6 +28,8 @@ const accSel = new Set();
 let selMode = false;
 /* 「全部测试」运行中标记：模块级，切页 / 5s 轮询都不会清它；重复点击靠它兜住。 */
 let probeAllRunning = false;
+/* 测试中途停止标记：已发出的请求跑完，未开始的账号不再取号。 */
+let probeAllStop = false;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
@@ -41,6 +43,12 @@ let mdLocks = [], mdRecent = [];
 // 单模型「验证」结果与进行中标记（仅本次页面会话有效；不写回服务端证据）。
 const mdVerify = Object.create(null), mdVerifyBusy = Object.create(null);
 let reqFilter = { q: '', outcome: '' };
+/* 账号表排序：key 为空 = 服务端 UID 顺序。dir 1 升序 / -1 降序，存 localStorage。 */
+let accSort = { key: '', dir: 1 };
+try {
+  const saved = JSON.parse(localStorage.getItem('wb2api.accSort') || 'null');
+  if (saved && typeof saved.key === 'string' && (saved.dir === 1 || saved.dir === -1)) accSort = saved;
+} catch (e) {}
 let reqEntries = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
 let usageData = null;
@@ -824,16 +832,101 @@ function accScopeText() {
   return bits.join(' · ');
 }
 
-// accVisibleList 当前筛选范围内的账号（分组 + 关键词 + 状态）。全选、表头三态、
+// accSortVal 取排序键。状态按「问题优先」编号（禁用 0 → 可用 3），
+// 升序即最需要关注的号排在最前；不限量账号的积分视为最大值。
+function accSortVal(s, key) {
+  switch (key) {
+    case 'who': return String(s.note || s.nickname || s.uid || '').toLowerCase();
+    case 'status': return { disabled: 0, paused: 1, cooling: 2, healthy: 3 }[accStatusOf(s)] ?? 4;
+    case 'credits': return s.credits == null ? -1 : (s.credits_total === -1 ? Number.MAX_SAFE_INTEGER : s.credits);
+    case 'fails': return s.err_total || 0;
+    case 'inflight': return s.in_flight || 0;
+    case 'usage': return (s.token_usage && s.token_usage.total_tokens) || 0;
+    case 'last': return Date.parse(s.last_success || '') || 0;
+  }
+  return 0;
+}
+
+// accSortDefaultDir 首次点击该列的默认方向：文本/状态升序，数值/时间降序
+//（先看最大的积分、最近的失败、最新的成功）。
+function accSortDefaultDir(key) {
+  return (key === 'who' || key === 'status') ? 1 : -1;
+}
+
+// applyAccSort 按当前 accSort 排序并保留 UID 兜底顺序，保证同值时行序稳定。
+function applyAccSort(list) {
+  if (!accSort.key) return list;
+  const key = accSort.key, dir = accSort.dir;
+  return list.slice().sort((a, b) => {
+    const va = accSortVal(a, key), vb = accSortVal(b, key);
+    const cmp = (typeof va === 'string' || typeof vb === 'string')
+      ? String(va).localeCompare(String(vb), 'zh-CN', { numeric: true })
+      : (va - vb);
+    if (cmp) return cmp * dir;
+    return String(a.uid).localeCompare(String(b.uid));
+  });
+}
+
+// setAccStatus 统一设置状态筛选：下拉、概况卡片、脚本都走这里，
+// 保证三处显示一致；切换后清空多选，避免把看不见的号带进批量操作。
+function setAccStatus(v) {
+  accStatus = v || '';
+  const sel = $('accStatus');
+  if (sel) sel.value = accStatus;
+  if (typeof accSel !== 'undefined') accSel.clear();
+  paintAccounts();
+  syncStatFilter();
+}
+
+// syncStatFilter 概况卡片高亮当前筛选状态（aria-pressed 供读屏）。
+function syncStatFilter() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+  const cards = document.querySelectorAll('.stats .stat[data-status]');
+  Array.prototype.forEach.call(cards, el => {
+    const v = el.dataset.status === 'all' ? '' : el.dataset.status;
+    const on = v === accStatus;
+    el.classList.toggle('filter-on', on);
+    el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+// accVisibleList 当前筛选范围内的账号（分组 + 关键词 + 状态 + 排序）。全选、表头三态、
 // 批量操作都用同一口径，避免「看到 10 行、实际勾了整池 200 个」。
 function accVisibleList() {
   const all = (overviewData && overviewData.accounts) || [];
-  return all.filter(a => {
+  return applyAccSort(all.filter(a => {
     if (!a) return false;
     if (accGroupFilter != null && String(a.group == null ? '' : a.group) !== accGroupFilter) return false;
     if (accStatus && accStatusOf(a) !== accStatus) return false;
     return accMatchQuery(a, accQuery);
+  }));
+}
+
+// syncAccSortHead 把排序状态写回表头（箭头 + aria-sort），并同步 title 提示。
+function syncAccSortHead() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+  const ths = document.querySelectorAll('#accTable thead th.sortable');
+  Array.prototype.forEach.call(ths, th => {
+    const on = th.dataset.sort === accSort.key;
+    th.classList.toggle('asc', on && accSort.dir > 0);
+    th.classList.toggle('desc', on && accSort.dir < 0);
+    th.setAttribute('aria-sort', on ? (accSort.dir > 0 ? 'ascending' : 'descending') : 'none');
+    th.title = on
+      ? '当前按此列' + (accSort.dir > 0 ? '升序' : '降序') + '；再点切换方向，第三次恢复默认顺序'
+      : '点击按此列排序';
   });
+}
+
+// toggleAccSort 点击表头：换列 → 用该列默认方向；同列 → 反向；再点一次 → 恢复
+// 服务端原始顺序。选择状态不清空（只是换显示顺序）。
+function toggleAccSort(key) {
+  if (!key) return;
+  const def = accSortDefaultDir(key);
+  if (accSort.key !== key) accSort = { key: key, dir: def };
+  else if (accSort.dir === def) accSort.dir = -def;
+  else accSort = { key: '', dir: 1 };
+  try { localStorage.setItem('wb2api.accSort', JSON.stringify(accSort)); } catch (e) {}
+  paintAccounts();
 }
 
 // paintAccounts 统一出口：先按 accGroupFilter 过滤，再把测试状态一起交给 renderAccounts。
@@ -841,6 +934,8 @@ function accVisibleList() {
 function paintAccounts() {
   const list = accVisibleList();
   renderAccounts(list, accGroupFilter != null || accQuery !== '' || accStatus !== '', { busy: probeBusy, res: probeResult });
+  syncAccSortHead();
+  syncStatFilter();
 }
 
 // loadGroups 取分组计数（GET /groups）。失败保留旧列表：后端未就绪时筛选停在「全部」，
@@ -1093,13 +1188,14 @@ async function runProbeBan(uid) {
 }
 
 async function runProbeAll() {
-  if (probeAllRunning) return; // 已在跑：重复点击无副作用
+  if (probeAllRunning) return; // 已在跑：点击由按钮自己的停止分支处理
   const list = accVisibleList();
   if (!list.length) { toast('当前筛选范围内没有账号', 'warn'); return; }
   if (!confirm('将对当前筛选范围内的 ' + list.length + ' 个账号逐个测试。\n' +
     '正常账号会发一次真实对话（消耗额度），封禁/冷却账号只做只读解封探测。\n确认开始？')) return;
 
   probeAllRunning = true;
+  probeAllStop = false;
   const btn = $('btnProbeAll');
   const total = list.length;
   // 浮窗先按本轮顺序铺好待测名单，逐个出结果时原地更新（不重新排序，不跳动）。
@@ -1108,8 +1204,13 @@ async function runProbeAll() {
   list.forEach(a => { if (a && a.uid && probeFloatUids.indexOf(a.uid) < 0) probeFloatUids.push(a.uid); });
   renderProbeFloat();
   let done = 0, ok = 0, bad = 0, skipped = 0;
-  const progress = () => { if (btn) btn.textContent = '测试中 ' + done + '/' + total; };
-  if (btn) { btn.disabled = true; progress(); }
+  // 运行中按钮变「停止」：66 个号每个最多 30s，中途发现筛错了也要能收手。
+  const progress = () => {
+    if (!btn) return;
+    btn.textContent = (probeAllStop ? '停止中 ' : '停止 ') + done + '/' + total;
+    btn.title = '点击停止：已发出的请求会跑完，未开始的账号不再测试';
+  };
+  if (btn) { btn.disabled = false; progress(); }
 
   // 单个账号的探测：把结论写进 probeResult 后返回，异常也落成「不可用」，
   // 保证 900 行的批量不会因为一个号超时/404 就整体卡住。
@@ -1152,23 +1253,39 @@ async function runProbeAll() {
   // 两个 worker 共用一个游标轮流取号：谁先返回谁继续，天然形成「上限 2、有人空就补位」。
   let next = 0;
   const worker = async () => {
-    while (next < list.length) {
+    while (next < list.length && !probeAllStop) {
       const acc = list[next++];
       await probeOne(acc);
     }
   };
+  let stopped = false;
   try {
     await Promise.all([worker(), worker()]);
   } finally {
+    stopped = probeAllStop;
     probeAllRunning = false;
-    if (btn) { btn.disabled = false; btn.textContent = '全部测试'; }
+    probeAllStop = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '全部测试';
+      btn.title = '逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测';
+    }
     probeFloatSkipped = skipped;
     renderProbeFloat();
     paintAccounts();
     loadOverview(true); // 同上：批量结束后立刻把「可用」对齐测试结论
+    if (stopped) {
+      toast('已停止测试：完成 ' + done + '/' + total + '，未测账号保持原状', 'warn');
+    }
   }
 }
-if ($('btnProbeAll')) $('btnProbeAll').onclick = runProbeAll;
+if ($('btnProbeAll')) $('btnProbeAll').onclick = () => {
+  if (!probeAllRunning) { runProbeAll(); return; }
+  // 停止：立即改按钮文案防止连点，worker 在下一轮循环退出。
+  probeAllStop = true;
+  const b = $('btnProbeAll');
+  if (b) { b.disabled = true; b.textContent = '停止中…'; }
+};
 
 // openMeta 分组/备注小弹框。field 决定聚焦哪个输入（点分组徽章就落在分组上）。
 function openMeta(uid, field) {
@@ -1564,12 +1681,47 @@ if ($('accQ')) {
   });
 }
 if ($('accStatus')) {
-  $('accStatus').onchange = () => {
-    accStatus = $('accStatus').value || '';
-    accSel.clear();
-    paintAccounts();
-  };
+  $('accStatus').onchange = () => setAccStatus($('accStatus').value);
 }
+
+/* ── 概况卡片点击筛选 ───────────────────────────────────────────────
+   卡片本身就是「这个状态有多少个号」的入口：点一下把账号表筛到该状态，
+   再点一次恢复全部。键盘 Enter / 空格同样可用。 */
+(function bindStatFilter() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+  const cards = document.querySelectorAll('.stats .stat[data-status]');
+  Array.prototype.forEach.call(cards, el => {
+    const pick = () => {
+      const v = el.dataset.status === 'all' ? '' : el.dataset.status;
+      setAccStatus(accStatus === v ? '' : v);
+    };
+    el.onclick = pick;
+    el.onkeydown = ev => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      pick();
+    };
+  });
+})();
+
+/* 表头排序：点击或 Enter / 空格触发；thead 用事件委托，tbody 每 5s 重建也不受影响。 */
+(function bindAccSort() {
+  if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+  const table = $('accTable');
+  const head = table && table.querySelector('thead');
+  if (!head) return;
+  head.addEventListener('click', ev => {
+    const th = ev.target.closest('th.sortable');
+    if (th) toggleAccSort(th.dataset.sort);
+  });
+  head.addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const th = ev.target.closest('th.sortable');
+    if (!th) return;
+    ev.preventDefault();
+    toggleAccSort(th.dataset.sort);
+  });
+})();
 
 /* ── 批量操作（多选工具条）───────────────────────────────────────────
    逐号调用既有的单号接口，并发 3；失败不中断其余账号，结束后汇总。

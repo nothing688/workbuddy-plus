@@ -61,9 +61,13 @@ func fingerprint(b []byte) string {
 // indexHTML 是把 <script src="theme.js"> / <script src="app.js"> 换成带指纹
 // URL 之后的页面字节。原始 index.html 里的引用保持无查询串形态（源码可读、
 // diff 干净），指纹只在运行时注入。
+var themeFingerprint = fingerprint(themeJS)
+
+var appFingerprint = fingerprint(appJS)
+
 var indexHTML = func() []byte {
-	s := strings.ReplaceAll(string(indexHTMLRaw), `src="theme.js"`, `src="theme.js?v=`+fingerprint(themeJS)+`"`)
-	s = strings.ReplaceAll(s, `src="app.js"`, `src="app.js?v=`+fingerprint(appJS)+`"`)
+	s := strings.ReplaceAll(string(indexHTMLRaw), `src="theme.js"`, `src="theme.js?v=`+themeFingerprint+`"`)
+	s = strings.ReplaceAll(s, `src="app.js"`, `src="app.js?v=`+appFingerprint+`"`)
 	return []byte(s)
 }()
 
@@ -88,6 +92,8 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff") // 禁 MIME 嗅探
 	w.Header().Set("X-Frame-Options", "DENY")           // 老浏览器兜底（CSP frame-ancestors 的等价项）
 	w.Header().Set("Referrer-Policy", "no-referrer")    // 不外泄面板地址给外部站点
+	// 面板常被直接暴露在公网：不要被搜索引擎收录（登录页、API 路径都不该进索引）。
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
 	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
@@ -106,11 +112,7 @@ func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 // 它必须被 <head> 以同步外链方式加载（CSP 禁内联）：晚于样式表就回到「刷新先闪深色」，
 // 因为用户的明暗偏好只存在浏览器 localStorage 里，服务端无从得知。
 func (p *Panel) themeScript(w http.ResponseWriter, r *http.Request) {
-	setSecurityHeaders(w)
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(themeJS)
+	p.serveScript(w, r, themeJS, themeFingerprint)
 }
 
 // fontFile 输出内嵌字体。字体内容随二进制固定（改字体必然换二进制），
@@ -127,9 +129,23 @@ func (p *Panel) fontFile(data []byte) http.HandlerFunc {
 
 // appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。
 func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
+	p.serveScript(w, r, appJS, appFingerprint)
+}
+
+// serveScript 输出脚本并决定缓存策略。
+//
+// URL 里的 ?v=<指纹> 与当前内容一致时给一年 immutable：这个 URL 的字节是内容寻址的，
+// 换版本必然换 URL（index.html 每次都是 no-store，拿到的一定是新指纹）。不带指纹或
+// 指纹对不上（书签、旧页面、中间层回放）仍按 no-store，避免旧脚本被复用（issue #33）。
+func (p *Panel) serveScript(w http.ResponseWriter, r *http.Request, data []byte, fp string) {
 	setSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Query().Get("v") == fp {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	w.Header().Set("ETag", `"`+fp+`"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(appJS)
+	_, _ = w.Write(data)
 }

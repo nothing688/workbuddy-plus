@@ -2612,3 +2612,32 @@ func TestModelsHiddenFiltered(t *testing.T) {
 		t.Errorf("hidden model leaked into /v1/models: ids=%v", ids)
 	}
 }
+
+// TestLivezAlwaysOK 存活探针与容量解耦：空池、全禁用时 /livez 仍 200，
+// 而 /healthz 按「现在能不能接流量」给 503。Docker HEALTHCHECK 用 /livez，
+// 否则空池或全池冷却会让容器一直显示 unhealthy 甚至被反复重建。
+func TestLivezAlwaysOK(t *testing.T) {
+	empty := pool.New("")
+	t.Cleanup(empty.Close)
+	allOff := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
+	allOff.Disable("u1", "session dead")
+
+	for name, p := range map[string]*pool.Pool{"empty": empty, "all-disabled": allOff} {
+		h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/livez", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: livez code=%d want 200", name, rec.Code)
+		}
+		if rec.Header().Get("X-Service") != ServiceName {
+			t.Errorf("%s: X-Service=%q", name, rec.Header().Get("X-Service"))
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: livez not json: %v", name, err)
+		}
+		if resp["status"] != "ok" || resp["service"] != ServiceName {
+			t.Errorf("%s: livez json=%v", name, resp)
+		}
+	}
+}
