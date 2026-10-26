@@ -44,7 +44,10 @@ import (
 // appVersion 面板版本，透出到 /panel/api/overview。
 // 本地构建保持 dev。发布构建由 CI 用 -X 注入上海时间（2026.9.26.711），不跟上游 1.x。
 var appVersion = "dev"
-var appRepository = "misakano7545/workbuddy2api-panel"
+
+// appRepository 自动更新检查的仓库：本仓镜像（上游默认指向 misakano7545 原始仓，
+// 直接沿用会把上游二进制装进本仓的合并构建）。自更新走 panel.self_update.repo。
+var appRepository = "nothing688/workbuddy-plus"
 
 // insecureKeyWarning 空 api_key = 完全不鉴权（httpauth.VerifyBearer 对空 key 恒放
 // 行），样例占位符 test_key = 人尽皆知的弱密钥；叠加非回环监听（缺省 ":7863" 绑
