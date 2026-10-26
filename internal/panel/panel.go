@@ -109,6 +109,11 @@ type Panel struct {
 	started time.Time
 	logs    *Ring
 
+	// 模型目录短缓存（按域）：模型页每次加载都直连上游太贵，缓存 2 分钟；
+	// 「重新获取」传 refresh=1 绕过。账号导入/移除外不主动失效，靠 TTL 兜底。
+	catalogMu    sync.Mutex
+	catalogCache map[string]catalogCacheEntry
+
 	// logins 进行中的 OAuth 设备授权会话（state → 会话信息）。
 	// poll 成功或超时（loginTTL）后剔除；面板常驻进程，容量天然有界。
 	loginMu sync.Mutex
@@ -228,6 +233,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuth(p.requestLogs))
 	p.mux.HandleFunc("GET /panel/api/credit_history", p.withAuth(p.creditHistory))
 	p.mux.HandleFunc("GET /panel/api/models", p.withAuth(p.models))
+	p.mux.HandleFunc("POST /panel/api/models/verify", p.withAuth(p.modelVerify))
 	p.mux.HandleFunc("GET /panel/api/keys", p.withAuth(p.keysList))
 	p.mux.HandleFunc("POST /panel/api/keys", p.withAuth(p.keysCreate))
 	p.mux.HandleFunc("POST /panel/api/keys/{id}", p.withAuth(p.keysPatch))
@@ -531,54 +537,233 @@ func (p *Panel) nicknames() map[string]string {
 	return nicks
 }
 
-// models 实时查询上游模型列表与 reasoning 实际档位（直连上游，不读路由层 1h 缓存）：
+// catalogAttempts 单个域最多试几个账号拉目录：健康号失败时依次用冷却/暂停/禁用号兜底。
+// 上限 3 是「够用、又不把禁用号当常态」的折中；目录请求只读，不占在途、不改池状态。
+const catalogAttempts = 3
+
+// catalogTTL 面板模型目录缓存时长。网关 /v1/models 自己缓存 10 分钟；面板要的
+// 是「打开就快、改配置后能立刻重拉」，2 分钟 + refresh=1 是折中。
+const catalogTTL = 2 * time.Minute
+
+// catalogCacheEntry 一次成功目录拉取的快照（含当时命中的账号，供 catalog_sources 展示）。
+type catalogCacheEntry struct {
+	infos   []upstream.ModelInfo
+	acctUID string
+	fetched time.Time
+}
+
+// catalogResult 一次域目录拉取的结果（命中的账号 + 模型 + 每个候选的失败明细）。
+type catalogResult struct {
+	acct     *auth.Auth
+	infos    []upstream.ModelInfo
+	fallback bool     // 命中账号当前不可选号（禁用/冷却/暂停）
+	errs     []string // 候选账号的失败原因（按尝试顺序）
+}
+
+// fetchRealmCatalog 按「健康优先、其余兜底」的顺序拉一个域的模型目录。
+// 只有健康账号拿不到时才用冷却/暂停/禁用账号：账号被本地禁用不等于上游凭证立刻失效，
+// 目录仍是上游实时下发的，可用于判断「上游到底有哪些模型」。
+func (p *Panel) fetchRealmCatalog(realm string, force bool) catalogResult {
+	if !force {
+		if res, ok := p.cachedCatalog(realm); ok {
+			return res
+		}
+	}
+	var res catalogResult
+	if p.cfg.Pool == nil || p.cfg.Upstream == nil {
+		return res
+	}
+	uids := p.cfg.Pool.CatalogUIDsForRealm(realm)
+	for i, uid := range uids {
+		if i >= catalogAttempts {
+			break
+		}
+		a := p.cfg.Pool.AuthByUID(uid)
+		if a == nil {
+			continue
+		}
+		p.prepareCatalogAuth(a)
+		var infos []upstream.ModelInfo
+		if realm == "global" {
+			// global 目录是进程级缓存（成功 1h / 失败 5min）。换号重试前清掉失败时间戳，
+			// 否则第二个号会直接命中上一个号留下的负缓存，根本不会发请求。
+			if i > 0 {
+				p.cfg.Upstream.InvalidateGlobalModelsCache()
+			}
+			infos = p.cfg.Upstream.FetchGlobalModelInfos(a)
+			if len(infos) == 0 {
+				res.errs = append(res.errs, uid+": 上游未返回可用模型")
+				continue
+			}
+		} else {
+			got, err := p.cfg.Upstream.FetchModels(a)
+			if err != nil {
+				res.errs = append(res.errs, uid+": "+err.Error())
+				continue
+			}
+			infos = got
+		}
+		res.acct, res.infos = a, infos
+		break
+	}
+	if res.acct != nil {
+		if st, ok := p.cfg.Pool.Status(res.acct.UID); ok {
+			res.fallback = st.Disabled || st.Cooling || st.Paused
+		}
+		p.storeCatalog(realm, res)
+	}
+	return res
+}
+
+// cachedCatalog 读未过期的目录缓存。账号已被移除时视为失效（否则 catalog_sources
+// 会指向一个不存在的号）。
+func (p *Panel) cachedCatalog(realm string) (catalogResult, bool) {
+	if p.cfg.Pool == nil {
+		return catalogResult{}, false
+	}
+	p.catalogMu.Lock()
+	e, ok := p.catalogCache[realm]
+	p.catalogMu.Unlock()
+	if !ok || len(e.infos) == 0 || time.Since(e.fetched) >= catalogTTL {
+		return catalogResult{}, false
+	}
+	acct := p.cfg.Pool.AuthByUID(e.acctUID)
+	if acct == nil {
+		return catalogResult{}, false
+	}
+	res := catalogResult{acct: acct, infos: e.infos}
+	if st, ok := p.cfg.Pool.Status(e.acctUID); ok {
+		res.fallback = st.Disabled || st.Cooling || st.Paused
+	}
+	return res, true
+}
+
+// cachedCatalogIDs 目录缓存里的模型 ID（供封禁探测等只读路径复用，避免每个号都拉一次）。
+func (p *Panel) cachedCatalogIDs(realm string) []string {
+	res, ok := p.cachedCatalog(realm)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(res.infos))
+	for _, mi := range res.infos {
+		if id := strings.TrimSpace(mi.ID); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (p *Panel) storeCatalog(realm string, res catalogResult) {
+	if res.acct == nil || len(res.infos) == 0 {
+		return
+	}
+	p.catalogMu.Lock()
+	if p.catalogCache == nil {
+		p.catalogCache = make(map[string]catalogCacheEntry)
+	}
+	p.catalogCache[realm] = catalogCacheEntry{
+		infos:   res.infos,
+		acctUID: res.acct.UID,
+		fetched: time.Now(),
+	}
+	p.catalogMu.Unlock()
+}
+
+// prepareCatalogAuth 拉目录前把临期 token 刷新掉：只维护凭证，不改池状态。
+// 刷新失败也继续发目录请求（token 可能仍有效），失败原因会由目录请求本身暴露。
+func (p *Panel) prepareCatalogAuth(a *auth.Auth) {
+	if a == nil || p.cfg.Upstream == nil || !a.NeedsRefresh(probeChatRefreshSkew) {
+		return
+	}
+	if err := p.cfg.Upstream.RefreshTokenIfNeeded(a, probeChatRefreshSkew); err != nil {
+		log.Printf("panel: models 刷新 token 失败 uid=%s: %v", a.UID, err)
+		return
+	}
+	if err := a.SaveAtomicRetry(); err != nil {
+		log.Printf("panel: models 刷新后落盘失败 uid=%s: %v", a.UID, err)
+	}
+}
+
+// catalogAccountLabel 目录来源账号的展示名：备注优先，其次昵称，最后 uid。
+func catalogAccountLabel(st pool.Status) string {
+	for _, s := range []string{st.Note, st.Nickname, st.UID} {
+		if v := strings.TrimSpace(s); v != "" {
+			return v
+		}
+	}
+	return st.UID
+}
+
+// models 查询上游模型列表与 reasoning 实际档位（面板侧缓存 2 分钟，refresh=1 强刷）：
 // 回答"该模型到底支持哪几档思考"。顺带刷新 client 的 effort 降级能力缓存。
 // 与 /v1/models 同口径的双域输出：CN 域模型加 "cn:" 前缀、global 域加 "global:" 前缀
 // （gateway 路由协议，前端显示的 id 就是调用时要填的完整 model 值）。
-// 各域独立探测、独立容错：某域无可用账号则整域跳过；两域全空时才报错
-// （有错误明细回 502，一个账号都没有回 503）。
+// 各域独立探测、独立容错：健康号优先，全部不可用时用禁用/冷却号兜底；
+// 两域全空时才报错（有错误明细回 502，一个账号都没有回 503）。
 func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0)
 	var fetchErrs []string
 
-	// refresh=1：强制重探 global 目录（issue #216 现象 3）。此前按钮只是重读 1h 缓存，
-	// 上游目录变了也纹丝不动。CN 侧本来就是每请求直连上游（无缓存），无需处理。
-	if r.URL.Query().Get("refresh") == "1" {
+	// refresh=1：两个域都强制重探（面板 CN 短缓存 + global 1h 缓存）。
+	// 上游目录变了时，按钮必须真的重拉，而不是继续读缓存。
+	force := r.URL.Query().Get("refresh") == "1"
+	if force {
 		p.cfg.Upstream.InvalidateGlobalModelsCache()
 	}
 
-	// CN 域：有可用 CN 账号才查（此前无条件 Pool.Pick()+FetchModels——选中 global
-	// 账号时打 CN 端点必然失败，混合池表现为偶发 502，纯 global 池必炸）。
+	// 两个域各自「健康账号优先、禁用/冷却账号兜底」拉目录：
+	// 池里全是禁用号时也能看到上游目录（只读，不解冻、不改池状态）。
 	var cnAcct, globalAcct *auth.Auth // 供下方模型繁忙度复用同一批账号
-	if uids := p.cfg.Pool.AvailableUIDsForRealm("cn"); len(uids) > 0 {
-		if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
-			cnAcct = acct
-			infos, err := p.cfg.Upstream.FetchModels(acct)
-			if err != nil {
-				fetchErrs = append(fetchErrs, "cn: "+err.Error())
-			} else {
-				for _, mi := range infos {
-					out = append(out, panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP))
-				}
+	catalogSources := map[string]any{}
+	noteCatalog := func(realm string, res catalogResult) {
+		if res.acct == nil {
+			return
+		}
+		st, _ := p.cfg.Pool.Status(res.acct.UID)
+		catalogSources[realm] = map[string]any{
+			"uid":      res.acct.UID,
+			"note":     st.Note,
+			"nickname": st.Nickname,
+			"disabled": st.Disabled,
+			"fallback": res.fallback,
+		}
+		if res.fallback {
+			kind := "不可选号账号"
+			if st.Disabled {
+				kind = "已禁用账号"
 			}
+			fetchErrs = append(fetchErrs, realm+"：可用账号拉取失败，目录来自"+kind+" "+
+				catalogAccountLabel(st)+"（仅代表上游目录，不代表该号可用）")
 		}
 	}
 
-	// global 域：路由开关开且有可用 global 账号才查（独立目录端点，FetchGlobalModelInfos；
+	cnCat := p.fetchRealmCatalog("cn", force)
+	cnAcct = cnCat.acct
+	if len(cnCat.infos) == 0 {
+		for _, e := range cnCat.errs {
+			fetchErrs = append(fetchErrs, "cn: "+e)
+		}
+	} else {
+		noteCatalog("cn", cnCat)
+		for _, mi := range cnCat.infos {
+			out = append(out, panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP))
+		}
+	}
+
+	// global 域：路由开关开才查（独立目录端点，FetchGlobalModelInfos；
 	// Upstream.GlobalEnabled 是探测侧同一道闸，与 main 装配的 config global.enabled 一致）。
 	if p.cfg.Upstream.GlobalEnabled {
-		if uids := p.cfg.Pool.AvailableUIDsForRealm("global"); len(uids) > 0 {
-			if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
-				globalAcct = acct
-				infos := p.cfg.Upstream.FetchGlobalModelInfos(acct)
-				if len(infos) == 0 {
-					fetchErrs = append(fetchErrs, "global: 上游未返回可用模型")
-				} else {
-					efforts, defaults := p.cfg.Upstream.GlobalEffortSnapshot()
-					for _, mi := range infos {
-						out = append(out, panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP))
-					}
-				}
+		globalCat := p.fetchRealmCatalog("global", force)
+		globalAcct = globalCat.acct
+		if len(globalCat.infos) == 0 {
+			for _, e := range globalCat.errs {
+				fetchErrs = append(fetchErrs, "global: "+e)
+			}
+		} else {
+			noteCatalog("global", globalCat)
+			efforts, defaults := p.cfg.Upstream.GlobalEffortSnapshot()
+			for _, mi := range globalCat.infos {
+				out = append(out, panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP))
 			}
 		}
 	}
@@ -683,13 +868,15 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 没有可用账号时根本没发请求，也就没有 fetchErr —— 显式补一条。否则界面只剩
-	// 内置出图模型（2 条），用户会以为「上游就这么多模型」，看不出是拉不到对话目录。
-	if len(p.cfg.Pool.AvailableUIDsForRealm("cn")) == 0 {
-		fetchErrs = append(fetchErrs, "cn：没有可用账号，拉不到对话模型目录")
+	// 一个账号都没有（连禁用的也没有）时根本没发请求，也就没有 fetchErr —— 显式补一条。
+	// 否则界面只剩内置出图模型（2 条），用户会以为「上游就这么多模型」。
+	// 注意判据是「有没有账号」而不是「有没有可用账号」：禁用号现在也会兜底拉目录，
+	// 只有池子真的空了才该提示拉不到。
+	if len(p.cfg.Pool.CatalogUIDsForRealm("cn")) == 0 {
+		fetchErrs = append(fetchErrs, "cn：没有账号，拉不到对话模型目录")
 	}
-	if p.cfg.Upstream.GlobalEnabled && len(p.cfg.Pool.AvailableUIDsForRealm("global")) == 0 {
-		fetchErrs = append(fetchErrs, "global：没有可用账号，拉不到对话模型目录")
+	if p.cfg.Upstream.GlobalEnabled && len(p.cfg.Pool.CatalogUIDsForRealm("global")) == 0 {
+		fetchErrs = append(fetchErrs, "global：没有账号，拉不到对话模型目录")
 	}
 
 	if len(out) == 0 {
@@ -710,6 +897,9 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		// warnings 目录拉取过程中的问题（无可用账号 / 上游报错 / 繁忙度查询失败）。
 		// 非致命：出图模型始终有内置清单，面板照常显示，但要把「少」的原因说清楚。
 		"warnings": fetchErrs,
+		// catalog_sources 每个域实际用哪个账号拉的目录（disabled/fallback=true 表示
+		// 健康号拉取失败、由禁用或冷却账号兜底），前端据此标注「目录来源」。
+		"catalog_sources": catalogSources,
 	})
 }
 
@@ -1421,8 +1611,9 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 对话路径才是 11140 的判词来源（见函数注释）。请求体与 probe_chat 同形，
-	// 这里只关心成功/错误，不解析回包正文。
-	bare := p.probeDefaultModel(a)
+	// 这里只关心成功/错误，不解析回包正文。封禁探测取账号目录的第一个模型（旧口径）：
+	// 它要的是「账号此刻能不能发对话」，不该被 probe_chat 的 hy3 优先策略改变。
+	bare := p.probeCatalogFirstModel(a)
 	probeBody, berr := json.Marshal(map[string]any{
 		"model":      bare,
 		"messages":   []map[string]any{{"role": "user", "content": "ping"}},

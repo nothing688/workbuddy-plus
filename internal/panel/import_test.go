@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type importTestEnv struct {
 	panel   *Panel
 	pool    *pool.Pool
 	authDir string
+	upCalls *atomic.Int32
 }
 
 // newImportTestEnv 装配最小可用的面板：池在临时目录、上游全部指向无害信封
@@ -40,8 +42,10 @@ func newImportTestEnv(t *testing.T) *importTestEnv {
 	pl := pool.New("")
 	t.Cleanup(pl.Close)
 
+	calls := &atomic.Int32{}
 	up := &upstream.Client{
 		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			calls.Add(1)
 			return probeJSONResponse(200, `{"code":0,"data":{}}`), nil
 		})},
 		ChatBaseCN:        "https://cn.example",
@@ -51,7 +55,7 @@ func newImportTestEnv(t *testing.T) *importTestEnv {
 		BillingBaseGlobal: "https://global.example",
 	}
 	p := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up, AuthDir: authDir})
-	return &importTestEnv{panel: p, pool: pl, authDir: authDir}
+	return &importTestEnv{panel: p, pool: pl, authDir: authDir, upCalls: calls}
 }
 
 type importTestResp struct {
@@ -65,6 +69,12 @@ type importTestResp struct {
 
 func (e *importTestEnv) importRaw(t *testing.T, body string) (int, importTestResp) {
 	t.Helper()
+	return e.importRawForm(t, body, nil)
+}
+
+// importRawForm 同 importRaw，额外带表单字段（group / skip_tasks 等）。
+func (e *importTestEnv) importRawForm(t *testing.T, body string, fields map[string]string) (int, importTestResp) {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, err := mw.CreateFormFile("file", "accounts.json")
@@ -73,6 +83,11 @@ func (e *importTestEnv) importRaw(t *testing.T, body string) (int, importTestRes
 	}
 	if _, err := fw.Write([]byte(body)); err != nil {
 		t.Fatal(err)
+	}
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := mw.Close(); err != nil {
 		t.Fatal(err)
@@ -428,4 +443,33 @@ func TestImportExportedTwoAccounts(t *testing.T) {
 	e.mustImport(t, body, 2, 2)
 	e.account(t, "1")
 	e.account(t, "2")
+}
+
+// TestImportSkipTasksSkipsUpstream skip_tasks=1 时导入只落盘/进池，不再逐号
+// 签到、查余额或启动后台任务（批量迁移的耗时与上游压力主要来自这里）。
+func TestImportSkipTasksSkipsUpstream(t *testing.T) {
+	e := newImportTestEnv(t)
+	code, resp := e.importRawForm(t,
+		`[{"uid":"skip1","access_token":"at-skip1","refresh_token":"rt-skip1","expires_at":1893456000}]`,
+		map[string]string{"skip_tasks": "1"})
+	if code != http.StatusOK || resp.Imported != 1 {
+		t.Fatalf("skip import code=%d resp=%+v", code, resp)
+	}
+	if n := e.upCalls.Load(); n != 0 {
+		t.Fatalf("skip_tasks 仍发了 %d 次上游请求", n)
+	}
+	if _, ok := e.pool.Status("skip1"); !ok {
+		t.Fatal("skip1 未进池")
+	}
+
+	// 不跳过时保持旧行为：至少会打签到 / 余额接口。
+	normal := newImportTestEnv(t)
+	code, resp = normal.importRaw(t,
+		`[{"uid":"skip2","access_token":"at-skip2","refresh_token":"rt-skip2","expires_at":1893456000}]`)
+	if code != http.StatusOK || resp.Imported != 1 {
+		t.Fatalf("normal import code=%d resp=%+v", code, resp)
+	}
+	if normal.upCalls.Load() == 0 {
+		t.Fatal("未勾选 skip_tasks 时应照常打上游签到/余额")
+	}
 }

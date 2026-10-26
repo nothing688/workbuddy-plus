@@ -323,6 +323,17 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .tag.bad { background: var(--bad-soft); color: var(--bad); }
 .tag.mute { background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); }
 .md-avail { flex: none; padding: 0 6px; font-size: 10.5px; line-height: 16px; }
+/* 模型行内「验证」小按钮：不占独立列，跟在可用性标签后面。 */
+.md-verify {
+  flex: none; height: 18px; padding: 0 6px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  font-size: 10.5px; line-height: 16px; cursor: pointer;
+}
+.md-verify:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.md-verify:disabled { opacity: .6; cursor: default; }
+.md-verify.ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); color: var(--ok); }
+.md-verify.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
+.acc.md .c-verify { width: 1px; white-space: nowrap; }
 .rate-limits { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; min-width: 210px; }
 .rate-limit {
   display: flex; align-items: baseline; gap: 6px; padding: 4px 7px;
@@ -379,12 +390,14 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
 .pool-active .grow { flex: 1; }
 .pool-active select { width: auto; padding: 4px 9px; font-size: 12.5px; border-radius: 6px; }
 .pool-active .sel-note select { padding-right: 24px; font-size: 12px; }
+.pool-active .acc-search input { width: 160px; padding: 4px 9px; font-size: 12.5px; border-radius: 6px; }
 /* 批量选择工具条：只在有勾选时出现（hidden），嵌在「当前调用池」这条里，
    沿用徽章的浅色胶囊语言，避免与右侧调用池切换控件抢视觉。 */
 .acc-selbar {
-  display: inline-flex; align-items: center; gap: 7px; padding: 2px 4px 2px 11px;
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 4px 3px 11px;
   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
   border-radius: 999px; background: var(--accent-soft);
+  flex-wrap: wrap; row-gap: 4px; max-width: 100%;
 }
 .acc-selbar .cnt { font-size: 12px; font-weight: 550; color: var(--accent); white-space: nowrap; }
 .acc-selbar button { height: 22px; padding: 0 10px; }
@@ -884,7 +897,9 @@ body {
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: blur(10px);
 }
-.brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px; border-radius: 10px; cursor: pointer; transition: background .14s; }
+.brand:hover { background: var(--surface-2); }
+.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .brand::before {
   content: ""; flex: none; width: 26px; height: 26px; border-radius: 8px;
   background: linear-gradient(140deg, var(--accent), #8a6cff 85%);
@@ -1369,15 +1384,18 @@ input::placeholder { color: var(--ink-3); }
 }
 .who .grp-line .grp-badge:hover:not(:disabled) { color: var(--accent); text-decoration: underline dotted; }
 
-/* 健康色条随行高铺满（多行账号信息时不再只画一小段） */
+/* 健康色条随行高铺满（多行账号信息时不再只画一小段）。
+   上下各留 7px 内缩 + 圆角：相邻两行的色条不再首尾相接成一条长线，
+   一眼能看出这是「每个账号各自的状态条」。 */
 .acc td.mark { position: relative; padding: 0; }
-.acc td.mark i { position: absolute; left: 0; top: 0; bottom: 0; height: auto; min-height: 0; width: 3px; }
+.acc td.mark i { position: absolute; left: 0; top: 7px; bottom: 7px; height: auto; min-height: 0; width: 3px; border-radius: 2px; }
 </style>
 </head>
 <body>
 <div class="shell">
   <nav class="nav">
-    <div class="brand">
+    <div class="brand" id="brandToggle" role="button" tabindex="0"
+         title="收起/展开侧边栏" aria-label="收起或展开侧边栏" aria-expanded="true">
       <div class="name">WorkBuddy2API</div>
       <div class="sub" id="navSub">控制台</div>
     </div>
@@ -1479,6 +1497,18 @@ input::placeholder { color: var(--ink-3); }
             <select id="poolActiveSelect"><option value="__all__">全部分组</option></select>
           </label>
           <span class="note" id="accGroupCounts"></span>
+          <label class="sel-note acc-search" title="按备注 / 昵称 / uid 过滤；空格分词为 AND">
+            <input id="accQ" type="search" placeholder="搜索备注 / 昵称 / uid" aria-label="搜索账号">
+          </label>
+          <label class="sel-note" title="按账号状态过滤">
+            <select id="accStatus" aria-label="按状态过滤账号">
+              <option value="">全部状态</option>
+              <option value="healthy">可用</option>
+              <option value="cooling">冷却 / 异常</option>
+              <option value="paused">暂停选号</option>
+              <option value="disabled">已禁用</option>
+            </select>
+          </label>
           <button class="xs primary" id="btnPoolActive" title="选好分组后点此切换为默认调用池（下拉本身只改查看范围）">切换</button>
           <button class="xs" id="btnSelMode" title="进入多选：勾选账号后可批量移动到分组；再次点击退出并清空选择">多选</button>
           <button class="xs" id="btnProbeAll" title="逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测">全部测试</button>
@@ -1489,6 +1519,10 @@ input::placeholder { color: var(--ink-3); }
           <span class="acc-selbar" id="accSelBar" hidden>
             <span class="cnt" id="accSelCount">已选 0 个</span>
             <button class="xs" id="btnAccMove" title="把已选账号整批移动到某个分组（也可移出分组）">移动到分组</button>
+            <button class="xs ghost" data-batch="disable" title="禁用已选账号（不再参与选号，可随时解冻）">禁用</button>
+            <button class="xs ghost" data-batch="pause" title="已选账号暂停选号（仍照常保号）">暂停</button>
+            <button class="xs ghost" data-batch="revive" title="解冻已选账号并清除冷却/熔断">解冻</button>
+            <button class="xs ghost danger" data-batch="remove" title="移除已选账号（删除凭证文件，不可恢复）">移除</button>
             <button class="xs ghost" id="btnAccSelClear" title="清除全部勾选">清除选择</button>
           </span>
         </div>
@@ -1637,7 +1671,7 @@ input::placeholder { color: var(--ink-3); }
         </div>
         <div class="tbl-wrap">
         <table class="acc md">
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th></tr></thead>
+          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th><th class="c-verify" aria-label="验证"></th></tr></thead>
           <tbody id="mdBody"></tbody>
         </table>
         </div>
@@ -2411,6 +2445,9 @@ input::placeholder { color: var(--ink-3); }
         <div class="hint" style="margin-bottom:8px">可一次选多个 JSON 文件，每个文件可以是：账号数组、单个账号对象、<code>{"accounts":[...]}</code> / <code>{"data":{"accounts":[...]}}</code> 包裹、JSONL（每行一个账号）或 access_token 字符串数组。必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选；兼容 <code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等别名，过期时间戳秒或毫秒均可。</div>
         <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
         <datalist id="metaGroupList"></datalist>
+        <label class="sel-note" style="margin:0 0 8px" title="批量迁移建议勾选：导入后不再对每个号签到、查余额或启动新账号任务">
+          <input type="checkbox" id="importSkipTasks"> 跳过导入后的签到 / 余额 / 后台任务
+        </label>
         <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
         <div id="importDone" class="state ok" hidden></div>
         <div id="importErr" class="state err" hidden></div>

@@ -64,6 +64,9 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	}
 	// group 可选：本次导入成功的账号统一归到该组（空 = 不动已有分组）。
 	group := strings.TrimSpace(r.FormValue("group"))
+	// skip_tasks 可选：批量迁移时跳过逐号签到 / 余额查询 / 新账号后台任务。
+	// 这些调用原本同步串行，100 个号导入会把请求拖到几十秒并打满上游。
+	skipTasks := isTruthyForm(r.FormValue("skip_tasks"))
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "missing file field: "+err.Error())
@@ -192,6 +195,11 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
+		// skip_tasks 时整段跳过：导入只负责落盘 + 进池，不产生任何上游请求。
+		if skipTasks {
+			imported++
+			continue
+		}
 		if realm == "global" {
 			if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
 				log.Printf("panel: import global 注册激活 uid=%s: %v", uid, err)
@@ -221,12 +229,13 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	total = len(accounts)
 	log.Printf("panel: cockpit import finished total=%d imported=%d skipped=%d", total, imported, skipped)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"total":    total,
-		"imported": imported,
-		"skipped":  skipped,
-		"errors":   errs,
-		"group":    group,
+		"ok":         true,
+		"total":      total,
+		"imported":   imported,
+		"skipped":    skipped,
+		"errors":     errs,
+		"group":      group,
+		"skip_tasks": skipTasks,
 	})
 }
 
@@ -548,4 +557,13 @@ func validImportUID(uid string) bool {
 		}
 	}
 	return true
+}
+
+// isTruthyForm 解析表单开关：1/true/on/yes 视为真（大小写不敏感）。
+func isTruthyForm(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
 }

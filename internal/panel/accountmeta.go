@@ -31,7 +31,7 @@ const (
 	probeChatTimeout = 30 * time.Second
 	// probeChatMaxReply 回显正文的最大字符数（按 rune 截，不切碎中文）。
 	probeChatMaxReply = 200
-	// probeChatFallbackModel 拿不到账号模型目录时的兜底模型（各域通用短名）。
+	// probeChatFallbackModel 可用性测试的首选模型 / 目录不可用时的兜底（各域通用短名）。
 	probeChatFallbackModel = "hy3"
 	// probeChatRefreshSkew 探测前的 token 新鲜度要求：与请求路径同口径，
 	// 快过期时先刷一次，避免明明账号可用却因为 token 过期报失败。
@@ -157,10 +157,14 @@ func (p *Panel) probeDisableIfTerminal(uid string, status int, body string, call
 // accountProbeChat POST /panel/api/accounts/{uid}/probe_chat
 //
 // body {"model":"cn:hy3"}（可选）→ {ok, model, latency_ms, reply, error,
-// revived, group}。
+// revived, group, attempts?}。
 //
 // 真的发一条 chat 请求（messages=[user "ping"]、max_tokens 16）来判定账号此刻
 // 能不能用。不记成功/失败、不占在途；瞬时失败（429 / 5xx / 网络）不改池状态。
+//
+// 模型选择：调用方显式给 model 就只测它；没给则按 hy3 → 该账号目录前两个的顺序
+// 逐个尝试，遇到模型级失败（11102/11158/14401/6004/14003）继续换下一个，避免把
+// 「这个模型不可用」误判成「账号不可用」。attempts 只在发生过换模型时出现。
 //
 // 状态联动只有两条，都是「上游已经给出终态判词」才落地：
 //   - 探测成功且账号 disabled → Pool.Revive 解冻并回归原分组（移入 DisabledGroup
@@ -168,6 +172,7 @@ func (p *Panel) probeDisableIfTerminal(uid string, status int, body string, call
 //   - 探测命中终态故障（11140 账号级风控 / 12153 session dead）→ Pool.Disable，
 //     响应 disabled=true + disabled_reason，避免「测试说不可用、池子照样选它」。
 //     11-128 渠道校验、限流、网关 401（无 12153 信封）都不算终态，不动池。
+//
 // 探测失败仍是 200 + ok:false，由前端统一渲染错误文案（与 checkin 的非致命错误同风格）。
 func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
@@ -189,13 +194,17 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	realm := a.Realm()
-	bare := probeBareModel(req.Model)
-	if bare == "" {
-		bare = p.probeDefaultModel(a)
+	explicit := probeBareModel(req.Model)
+	// 未指定模型时先只测 hy3：它是两域通用的免费短名，绝大多数账号第一个就过。
+	// 目录只在 hy3 被上游按「模型级」拒绝后才去拉——不再为了选模型先打两次目录请求，
+	// 「全部测试」几十个号时能省掉几十次上游调用。
+	candidates := []string{probeChatFallbackModel}
+	if explicit != "" {
+		candidates = []string{explicit}
 	}
 	resp := map[string]any{
 		"ok":         false,
-		"model":      realm + ":" + bare,
+		"model":      realm + ":" + candidates[0],
 		"latency_ms": int64(0),
 		"reply":      "",
 		"error":      "",
@@ -221,86 +230,126 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 非流式语义的请求体（上游 prepareBody 会强制 stream:true，回包仍是 SSE，
-	// 下面按两种形态都能解析）。max_tokens 压到 16：只要一句回复即可判定可用。
-	body, err := json.Marshal(map[string]any{
-		"model":      bare,
-		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-		"max_tokens": 16,
-		"stream":     false,
-	})
-	if err != nil {
-		resp["error"] = "build body: " + err.Error()
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), probeChatTimeout)
 	defer cancel()
-	start := time.Now()
-	rc, status, respBody, callErr := p.cfg.Upstream.ChatStreamContext(ctx, a, body, "", upstream.ChatMeta{}, nil)
-	if callErr != nil {
-		if rc != nil {
-			rc.Close()
+	var attempts []map[string]any
+	catalogLoaded := explicit != ""
+	for i := 0; i < len(candidates); i++ {
+		bare := candidates[i]
+		resp["model"] = realm + ":" + bare
+		// 非流式语义的请求体（上游 prepareBody 会强制 stream:true，回包仍是 SSE，
+		// 下面按两种形态都能解析）。max_tokens 压到 16：只要一句回复即可判定可用。
+		body, err := json.Marshal(map[string]any{
+			"model":      bare,
+			"messages":   []map[string]any{{"role": "user", "content": "ping"}},
+			"max_tokens": 16,
+			"stream":     false,
+		})
+		if err != nil {
+			resp["error"] = "build body: " + err.Error()
+			break
 		}
+		start := time.Now()
+		rc, status, respBody, callErr := p.cfg.Upstream.ChatStreamContext(ctx, a, body, "", upstream.ChatMeta{}, nil)
 		resp["latency_ms"] = elapsedMs(start)
-		resp["error"] = callErr.Error()
-		if disabled, reason := p.probeDisableIfTerminal(uid, status, string(respBody), callErr); disabled {
-			resp["disabled"] = true
-			resp["disabled_reason"] = reason
-		}
-		log.Printf("panel: probe_chat uid=%s model=%s 失败: %v", uid, bare, callErr)
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	if status >= 400 {
-		if rc != nil {
-			rc.Close()
-		}
-		resp["latency_ms"] = elapsedMs(start)
-		resp["error"] = fmt.Sprintf("upstream http %d: %s", status, truncateStr(string(respBody), 200))
-		if disabled, reason := p.probeDisableIfTerminal(uid, status, string(respBody), nil); disabled {
-			resp["disabled"] = true
-			resp["disabled_reason"] = reason
-		}
-		log.Printf("panel: probe_chat uid=%s model=%s http=%d", uid, bare, status)
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	if rc == nil {
-		resp["latency_ms"] = elapsedMs(start)
-		resp["error"] = "upstream returned no body"
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
 
-	raw, readErr := io.ReadAll(io.LimitReader(rc, 1<<20))
-	rc.Close()
-	latency := elapsedMs(start)
-	resp["latency_ms"] = latency
-	if readErr != nil {
-		resp["error"] = "read reply: " + readErr.Error()
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	reply, perr := probeReplyText(raw)
-	if perr != nil {
-		resp["error"] = perr.Error()
-		log.Printf("panel: probe_chat uid=%s model=%s 解析失败: %v", uid, bare, perr)
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	resp["ok"] = true
-	resp["reply"] = truncateReply(reply)
-	log.Printf("panel: probe_chat uid=%s model=%s ok latency=%dms", uid, bare, latency)
+		// 模型级失败不是账号坏：11102/11158/14401（模型不存在/无权限/无路由）与
+		// 6004/14003（模型额度节流）都只否掉「这个模型」。用户没点名模型时换下一个
+		// 候选继续测，否则会把「某个模型不可用」误判成「整个账号不可用」。
+		modelLevel := status >= 400 &&
+			(upstream.IsModelBlocked(status, string(respBody)) || upstream.IsModelRateLimit(string(respBody)))
+		if modelLevel && explicit == "" {
+			if !catalogLoaded {
+				catalogLoaded = true
+				for _, id := range p.probeCatalogModels(a) {
+					if len(candidates) >= probeChatMaxModels {
+						break
+					}
+					dup := false
+					for _, c := range candidates {
+						if c == id {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						candidates = append(candidates, id)
+					}
+				}
+			}
+			if i+1 < len(candidates) {
+				if rc != nil {
+					rc.Close()
+				}
+				attempts = append(attempts, map[string]any{
+					"model":  realm + ":" + bare,
+					"status": status,
+					"error":  truncateStr(string(respBody), 160),
+				})
+				log.Printf("panel: probe_chat uid=%s model=%s 模型级失败（http=%d），换下一个候选", uid, bare, status)
+				continue
+			}
+		}
 
-	// 探测确认可用 → 禁用号自动恢复：Revive 解冻并（有书签时）回归原分组。
-	// 先重新读一次状态：探测耗时最长 30s，期间账号可能已被别处禁用/恢复。
-	if cur, ok := p.cfg.Pool.Status(uid); ok && cur.Disabled && p.cfg.Pool.Revive(uid) {
-		after, _ := p.cfg.Pool.Status(uid)
-		resp["revived"] = true
-		resp["group"] = after.Group
-		log.Printf("panel: probe_chat 恢复 uid=%s group=%s", uid, after.Group)
+		if callErr != nil {
+			if rc != nil {
+				rc.Close()
+			}
+			resp["error"] = callErr.Error()
+			if disabled, reason := p.probeDisableIfTerminal(uid, status, string(respBody), callErr); disabled {
+				resp["disabled"] = true
+				resp["disabled_reason"] = reason
+			}
+			log.Printf("panel: probe_chat uid=%s model=%s 失败: %v", uid, bare, callErr)
+			break
+		}
+		if status >= 400 {
+			if rc != nil {
+				rc.Close()
+			}
+			resp["error"] = fmt.Sprintf("upstream http %d: %s", status, truncateStr(string(respBody), 200))
+			if disabled, reason := p.probeDisableIfTerminal(uid, status, string(respBody), nil); disabled {
+				resp["disabled"] = true
+				resp["disabled_reason"] = reason
+			}
+			log.Printf("panel: probe_chat uid=%s model=%s http=%d", uid, bare, status)
+			break
+		}
+		if rc == nil {
+			resp["error"] = "upstream returned no body"
+			break
+		}
+
+		raw, readErr := io.ReadAll(io.LimitReader(rc, 1<<20))
+		rc.Close()
+		latency := elapsedMs(start)
+		resp["latency_ms"] = latency
+		if readErr != nil {
+			resp["error"] = "read reply: " + readErr.Error()
+			break
+		}
+		reply, perr := probeReplyText(raw)
+		if perr != nil {
+			resp["error"] = perr.Error()
+			log.Printf("panel: probe_chat uid=%s model=%s 解析失败: %v", uid, bare, perr)
+			break
+		}
+		resp["ok"] = true
+		resp["reply"] = truncateReply(reply)
+		log.Printf("panel: probe_chat uid=%s model=%s ok latency=%dms", uid, bare, latency)
+
+		// 探测确认可用 → 禁用号自动恢复：Revive 解冻并（有书签时）回归原分组。
+		// 先重新读一次状态：探测耗时最长 30s，期间账号可能已被别处禁用/恢复。
+		if cur, ok := p.cfg.Pool.Status(uid); ok && cur.Disabled && p.cfg.Pool.Revive(uid) {
+			after, _ := p.cfg.Pool.Status(uid)
+			resp["revived"] = true
+			resp["group"] = after.Group
+			log.Printf("panel: probe_chat 恢复 uid=%s group=%s", uid, after.Group)
+		}
+		break
+	}
+	if len(attempts) > 0 {
+		resp["attempts"] = attempts
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -316,21 +365,62 @@ func probeBareModel(name string) string {
 	return strings.TrimSpace(bare)
 }
 
-// probeDefaultModel 未指定模型时取该账号可用模型列表的第一个；拿不到目录就兜底
-// probeChatFallbackModel。目录查询失败不影响探测本身（模型名是短名，各域通用）。
-func (p *Panel) probeDefaultModel(a *auth.Auth) string {
-	if p.cfg.Upstream != nil {
-		var infos []upstream.ModelInfo
-		if a.IsGlobal() {
-			infos = p.cfg.Upstream.FetchGlobalModelInfos(a)
-		} else if got, err := p.cfg.Upstream.FetchModels(a); err == nil {
-			infos = got
+// probeChatMaxModels 未指定模型时最多试几个候选：hy3 + 目录里的两个。
+// 只有 hy3 被模型级拒绝时才继续，正常号第一个就成功，不会平白多耗额度。
+const probeChatMaxModels = 3
+
+// probeCatalogModels 取该账号上游目录里的对话模型 ID（按上游顺序，最多 4 个）。
+// 目录失败 / 为空返回 nil；调用方自己决定是否回落 hy3。
+func (p *Panel) probeCatalogModels(a *auth.Auth) []string {
+	if p.cfg.Upstream == nil || a == nil {
+		return nil
+	}
+	realm := a.Realm()
+	// 复用模型页的短缓存：同一轮「全部测试」不会每个禁用号都拉一次目录。
+	if ids := p.cachedCatalogIDs(realm); len(ids) > 0 {
+		return ids
+	}
+	// 目录里含出图模型；这里只取对话模型由 probe 的失败重试兜住——模型页的缓存
+	// 已经过滤过非对话条目，直接复用即可。
+	var infos []upstream.ModelInfo
+	if a.IsGlobal() {
+		infos = p.cfg.Upstream.FetchGlobalModelInfos(a)
+	} else if got, err := p.cfg.Upstream.FetchModels(a); err == nil {
+		infos = got
+	}
+	if len(infos) > 0 {
+		p.storeCatalog(realm, catalogResult{acct: a, infos: infos})
+	}
+	out := make([]string, 0, 4)
+	for _, mi := range infos {
+		id := strings.TrimSpace(mi.ID)
+		if id == "" {
+			continue
 		}
-		for _, mi := range infos {
-			if id := strings.TrimSpace(mi.ID); id != "" {
-				return id
+		dup := false
+		for _, x := range out {
+			if x == id {
+				dup = true
+				break
 			}
 		}
+		if dup {
+			continue
+		}
+		out = append(out, id)
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+// probeCatalogFirstModel 封禁探测用的模型：账号目录的第一个对话模型，目录不可用回落 hy3。
+// 与 probe_chat 的「hy3 优先」分开：封禁探测只关心账号能不能发对话，沿用旧口径即可，
+// 不让测试模型的策略变化影响封禁判词。
+func (p *Panel) probeCatalogFirstModel(a *auth.Auth) string {
+	if ids := p.probeCatalogModels(a); len(ids) > 0 {
+		return ids[0]
 	}
 	return probeChatFallbackModel
 }

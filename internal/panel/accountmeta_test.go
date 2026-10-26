@@ -3,6 +3,7 @@ package panel
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -704,5 +705,69 @@ func TestAccountProbeBanLiftedWhenChatWorks(t *testing.T) {
 	st, _ := pl.Status("u1")
 	if !st.Disabled {
 		t.Fatal("probe_ban 只报结论，不该自动解冻")
+	}
+}
+
+// TestAccountProbeChatFallsBackOnModelRejection 未指定模型时：hy3 被上游判「无此模型」
+// 不能把整个账号判死，要按候选继续测下一个；成功后的 model 必须是真正成功的那个。
+func TestAccountProbeChatFallsBackOnModelRejection(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				raw, _ := io.ReadAll(r.Body)
+				var obj map[string]any
+				_ = json.Unmarshal(raw, &obj)
+				model := fmt.Sprint(obj["model"])
+				mu.Lock()
+				seen = append(seen, model)
+				mu.Unlock()
+				if model == probeChatFallbackModel {
+					return probeJSONResponse(400, `{"code":"11102","msg":"service info not found"}`), nil
+				}
+				return probeSSEResponse(
+					"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pong\"}}]}\n\n" +
+						"data: [DONE]\n\n"), nil
+			}
+			// 目录：v3 与企业端点共用同一份（两路都会被打到）。
+			return probeJSONResponse(200, `{"code":0,"data":{"models":[{"id":"glm-5.2","name":"GLM-5.2"}],`+
+				`"agents":[{"name":"cli","models":["glm-5.2"]}]}}`), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_chat", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK       bool             `json:"ok"`
+		Model    string           `json:"model"`
+		Attempts []map[string]any `json:"attempts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || resp.Model != "cn:glm-5.2" {
+		t.Fatalf("resp=%+v，want ok model=cn:glm-5.2（换到第二个候选）", resp)
+	}
+	if len(resp.Attempts) != 1 || resp.Attempts[0]["model"] != "cn:"+probeChatFallbackModel {
+		t.Fatalf("attempts=%v，want 记录一次 hy3 的模型级失败", resp.Attempts)
+	}
+	mu.Lock()
+	got := append([]string(nil), seen...)
+	mu.Unlock()
+	if len(got) != 2 || got[0] != probeChatFallbackModel || got[1] != "glm-5.2" {
+		t.Fatalf("实际出站模型=%v，want [hy3 glm-5.2]", got)
+	}
+	// 模型级拒绝不是账号故障：不得禁用/冷却/记错误。
+	if st, _ := pl.Status("u1"); st.Disabled || st.Cooling || st.ErrTotal != 0 {
+		t.Fatalf("模型级失败改了池状态：%+v", st)
 	}
 }

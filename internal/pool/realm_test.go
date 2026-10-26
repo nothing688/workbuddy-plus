@@ -152,3 +152,24 @@ func TestPickExcludingForRealmTried(t *testing.T) {
 		t.Fatalf("picked non-cn %s", a.UID)
 	}
 }
+
+// TestCatalogUIDsForRealmIncludesDisabled 目录拉取的候选集合：健康号在前，
+// 禁用/冷却号仍保留在后（全池被禁时面板也要能看到上游目录）。
+func TestCatalogUIDsForRealmIncludesDisabled(t *testing.T) {
+	p := realmPool(t)
+	p.Disable("cn1", "test disabled")
+
+	got := p.CatalogUIDsForRealm("cn")
+	want := []string{"cn2", "cn1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CatalogUIDsForRealm(cn)=%v want %v", got, want)
+	}
+
+	// 其它域不受影响；realm=="" 返回全部（健康在前、其余在后，组内按 UID 排序）。
+	if got := p.CatalogUIDsForRealm("global"); !reflect.DeepEqual(got, []string{"g1", "g2"}) {
+		t.Fatalf("CatalogUIDsForRealm(global)=%v", got)
+	}
+	if got := p.CatalogUIDsForRealm(""); !reflect.DeepEqual(got, []string{"cn2", "g1", "g2", "cn1"}) {
+		t.Fatalf("CatalogUIDsForRealm(all)=%v", got)
+	}
+}

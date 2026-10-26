@@ -7,6 +7,7 @@ package panel
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -29,15 +30,28 @@ type exportAccount struct {
 	Note  string `json:"note,omitempty"`
 }
 
-// exportAccounts GET /panel/api/export/accounts
+// exportAccounts GET /panel/api/export/accounts[?uids=uid1,uid2]
 //
 //	→ {"exported_at":"RFC3339","accounts":[{account,auth,group,note}, ...]}
 //
+// 不带 uids = 导出全部；带 uids = 只导出勾选的账号（面板多选）。
 // 顺序与池内 List 一致（UID 升序），便于 diff 两次导出。
 func (p *Panel) exportAccounts(w http.ResponseWriter, r *http.Request) {
+	// uids 只做筛选，不改变导出顺序；未知 UID 直接忽略（页面上的选择可能已过期）。
+	wanted := map[string]bool{}
+	if raw := strings.TrimSpace(r.URL.Query().Get("uids")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			if uid := strings.TrimSpace(part); uid != "" {
+				wanted[uid] = true
+			}
+		}
+	}
 	list := p.cfg.Pool.List()
 	out := make([]exportAccount, 0, len(list))
 	for _, st := range list {
+		if len(wanted) > 0 && !wanted[st.UID] {
+			continue
+		}
 		a := p.cfg.Pool.AuthByUID(st.UID)
 		if a == nil {
 			continue
@@ -58,6 +72,10 @@ func (p *Panel) exportAccounts(w http.ResponseWriter, r *http.Request) {
 		item.Group = st.Group
 		item.Note = st.Note
 		out = append(out, item)
+	}
+	if len(wanted) > 0 && len(out) == 0 {
+		writeErr(w, http.StatusBadRequest, "没有匹配的账号：勾选的账号可能已被移除，请刷新后重试")
+		return
 	}
 
 	name := "workbuddy-accounts-" + time.Now().Format("20060102-150405") + ".json"

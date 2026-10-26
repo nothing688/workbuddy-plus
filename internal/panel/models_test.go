@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
@@ -140,5 +141,119 @@ func TestPanelModelsAttachesBusyLevels(t *testing.T) {
 	}
 	if _, ok := seen["cn:glm-5.3-flash"]; ok {
 		t.Fatalf("上游未返回的模型不该凭空有繁忙度: %v", seen)
+	}
+}
+
+// TestPanelModelsFallsBackToDisabledAccount 全池被禁时仍能拉目录（只读兜底）：
+// 健康号优先，禁用号兜底；响应必须标明来源，避免把「禁用号拉的目录」当成可用证据。
+func TestPanelModelsFallsBackToDisabledAccount(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			body := `{"code":0,"data":{"models":[{"id":"glm-5.2","name":"GLM-5.2"}],` +
+				`"agents":[{"name":"cli","models":["glm-5.2"]}]}}`
+			if strings.HasSuffix(r.URL.Path, "/v2/chat/busy") {
+				body = `{"code":0,"data":[]}`
+			}
+			return &http.Response{StatusCode: 200,
+				Header: http.Header{"Content-Type": []string{"application/json"}},
+				Body:   io.NopCloser(strings.NewReader(body))}, nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	p := pool.New("")
+	t.Cleanup(p.Close)
+	p.Add(&auth.Auth{UID: "c1", AccessToken: "at", ExpiresAt: 9999999999, Domain: "www.codebuddy.cn"})
+	p.SetMeta("c1", "", "备用号")
+	p.Disable("c1", "session dead")
+
+	pn := New(Config{Version: "test", APIKey: "k", Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/panel/api/models", nil)
+	req.Header.Set("Authorization", "Bearer k")
+	pn.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Models         []map[string]any `json:"models"`
+		Warnings       []string         `json:"warnings"`
+		CatalogSources map[string]struct {
+			UID      string `json:"uid"`
+			Disabled bool   `json:"disabled"`
+			Fallback bool   `json:"fallback"`
+		} `json:"catalog_sources"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range resp.Models {
+		if m["id"] == "cn:glm-5.2" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("禁用号兜底未拿到目录：%+v", resp.Models)
+	}
+	src := resp.CatalogSources["cn"]
+	if src.UID != "c1" || !src.Disabled || !src.Fallback {
+		t.Fatalf("catalog_sources.cn=%+v，want uid=c1 disabled/fallback=true", src)
+	}
+	joined := strings.Join(resp.Warnings, "；")
+	if !strings.Contains(joined, "已禁用账号") {
+		t.Fatalf("warnings 未标明禁用号兜底：%v", resp.Warnings)
+	}
+}
+
+// TestPanelModelsCachesCatalog 模型页目录短缓存：连续两次加载只打一次上游；
+// refresh=1 绕过缓存（用户点「重新获取」时必须真的重拉）。
+func TestPanelModelsCachesCatalog(t *testing.T) {
+	var hits atomic.Int32
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/v3/config") {
+				hits.Add(1)
+			}
+			body := `{"code":0,"data":{"models":[{"id":"glm-5.2","name":"GLM-5.2"}],` +
+				`"agents":[{"name":"cli","models":["glm-5.2"]}]}}`
+			if strings.HasSuffix(r.URL.Path, "/v2/chat/busy") {
+				body = `{"code":0,"data":[]}`
+			}
+			return &http.Response{StatusCode: 200,
+				Header: http.Header{"Content-Type": []string{"application/json"}},
+				Body:   io.NopCloser(strings.NewReader(body))}, nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	p := pool.New("")
+	t.Cleanup(p.Close)
+	p.Add(&auth.Auth{UID: "c1", AccessToken: "at", ExpiresAt: 9999999999, Domain: "www.codebuddy.cn"})
+	pn := New(Config{Version: "test", APIKey: "k", Pool: p, Upstream: up})
+
+	get := func(q string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/panel/api/models"+q, nil)
+		req.Header.Set("Authorization", "Bearer k")
+		pn.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("get %q code=%d body=%s", q, rec.Code, rec.Body.String())
+		}
+	}
+
+	get("")
+	first := hits.Load()
+	if first == 0 {
+		t.Fatal("首次加载没有请求上游目录")
+	}
+	get("")
+	if got := hits.Load(); got != first {
+		t.Fatalf("缓存未命中：第二次加载又打了 %d 次（累计 %d）", got-first, got)
+	}
+	get("?refresh=1")
+	if got := hits.Load(); got <= first {
+		t.Fatalf("refresh=1 未绕过缓存（累计 %d）", got)
 	}
 }

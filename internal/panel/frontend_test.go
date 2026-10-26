@@ -699,7 +699,11 @@ ctx.mdLocks = [{ realm: 'global', model: 'gpt-5.6-sol', state: 'locked', reason:
 ctx.mdRecent = [];
 const deniedTag = ctx.mdAvailabilityTag(model('global:gpt-5.6-sol'));
 process.stdout.write(JSON.stringify({
-  cn: ctx.mdAvailabilityOf(model('cn:glm-5.3'), [], []),
+  cnUnknown: ctx.mdAvailabilityOf(model('cn:glm-5.3'), [], []).key,
+  cnMissing: state(model('cn:glm-5.3'), [{ realm: 'cn', model: 'glm-5.3', state: 'locked', reason: '11102 service info not found' }], []),
+  cnOk: state(model('cn:hy3'), [], [{ model: 'cn:hy3', status: 200, outcome: 'success' }]),
+  cnBare: state(model('cn:glm-5.3'), [], [{ model: 'glm-5.3', realm: 'cn', status: 200, outcome: 'success' }]),
+  cnWrongRealm: state(model('cn:glm-5.3'), [], [{ model: 'glm-5.3', realm: 'global', status: 200, outcome: 'success' }]),
   unknown: state(model('global:unknown'), [], []),
   denied: state(model('global:gpt-5.6-sol'), [{ realm: 'global', model: 'gpt-5.6-sol', state: 'locked', reason: '11158 model not allowed for account type' }], []),
   missing: state(model('global:auto-chat'), [{ realm: 'global', model: 'auto-chat', state: 'locked', reason: '11102 service info not found' }], []),
@@ -722,7 +726,7 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("model availability node test failed: %v\n%s", err, out)
 	}
-	const want = `{"cn":null,"unknown":"unknown","denied":"denied","missing":"missing","partial":"partial","starved":"starved","rate":"rate","upstream":"upstream","ok":"ok","deniedTag":true}`
+	const want = `{"cnUnknown":"unknown","cnMissing":"missing","cnOk":"ok","cnBare":"ok","cnWrongRealm":"unknown","unknown":"unknown","denied":"denied","missing":"missing","partial":"partial","starved":"starved","rate":"rate","upstream":"upstream","ok":"ok","deniedTag":true}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("model availability=%s want %s", out, want)
 	}
@@ -2162,5 +2166,55 @@ func TestAppJSAllCalledFunctionsDefined(t *testing.T) {
 			t.Errorf("app.js 调用了 %s() 但本文件里没有定义（调用 %d 次）—— 典型成因：搬代码时漏搬底层工具函数；"+
 				"运行时会在调用点抛 ReferenceError，若被 try/catch 吞掉则表现为「页面空白但无报错」", name, missing[name])
 		}
+	}
+}
+
+// 账号池本地筛选：状态归一（含冷却/熔断/暂停）与关键词 AND 匹配。
+func TestAppJSAccountFilters(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; account filter test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function accStatusOf');
+const end = src.indexOf('// accVisibleList');
+if (start < 0 || end < 0) throw new Error('account filter helpers not found');
+const ctx = { Date: Date };
+vm.createContext(ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) +
+  '\nthis.accStatusOf=accStatusOf; this.accMatchQuery=accMatchQuery;', ctx);
+const soon = new Date(Date.now() + 60000).toISOString();
+const acc = { note: '主力号', nickname: 'BL-Test', uid: 'u-123' };
+process.stdout.write(JSON.stringify({
+  status: [
+    ctx.accStatusOf({ disabled: true }),
+    ctx.accStatusOf({ paused: true }),
+    ctx.accStatusOf({ cool_remaining_sec: 10 }),
+    ctx.accStatusOf({ breaker_until: soon }),
+    ctx.accStatusOf({})
+  ],
+  query: [
+    ctx.accMatchQuery(acc, '主力'),
+    ctx.accMatchQuery(acc, 'bl u-123'),
+    ctx.accMatchQuery(acc, 'nope')
+  ]
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "account-filter-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("account filter node test failed: %v\n%s", err, out)
+	}
+	const want = `{"status":["disabled","paused","cooling","cooling","healthy"],"query":[true,true,false]}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("account filters=%s want %s", out, want)
 	}
 }

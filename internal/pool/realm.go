@@ -59,6 +59,34 @@ func (p *Pool) AvailableUIDsForRealm(realm string) []string {
 	return uids
 }
 
+// CatalogUIDsForRealm 返回该域可用于「只读模型目录拉取」的候选账号：
+// 先可用账号（healthy 且未占满在途），再其余（冷却 / 暂停 / 禁用 / 在途满），
+// 两段各自按 UID 排序，输出稳定。
+//
+// 目录拉取不参与选号、不改池状态，而账号被本地禁用并不等于上游凭证立刻失效，
+// 所以允许用禁用账号兜底：否则全池被禁时，面板连「上游到底有哪些模型」都看不到。
+// 调用方仍应优先使用健康账号，并在结果里标明目录是否来自禁用账号。
+func (p *Pool) CatalogUIDsForRealm(realm string) []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	now := time.Now()
+	healthy := make([]string, 0, len(p.byUID))
+	rest := make([]string, 0, len(p.byUID))
+	for uid, e := range p.byUID {
+		if realm != "" && e.a.Realm() != realm {
+			continue
+		}
+		if e.healthy(now) && !p.inFlightFull(e) {
+			healthy = append(healthy, uid)
+		} else {
+			rest = append(rest, uid)
+		}
+	}
+	sort.Strings(healthy)
+	sort.Strings(rest)
+	return append(healthy, rest...)
+}
+
 // WeightedAvailableUIDsForModelRealm 返回带虚拟实例权重的可用账号列表。
 //
 // 普通账号出现 1 次；有效快过期账号出现 expiringVirtualSlots 次。调用方继续按

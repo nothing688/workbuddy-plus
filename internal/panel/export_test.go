@@ -106,3 +106,55 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("tokens lost: %+v", a)
 	}
 }
+
+// TestExportAccountsSelectedSubset 多选导出：uids 只导出勾选的账号（保持池内顺序），
+// 全部 UID 都匹配不到时返回 400，而不是悄悄给一个空文件。
+func TestExportAccountsSelectedSubset(t *testing.T) {
+	e := newImportTestEnv(t)
+	e.mustImport(t, `[
+		{"uid":"e1","access_token":"at-e1","refresh_token":"rt-e1","expires_at":1893456000},
+		{"uid":"e2","access_token":"at-e2","refresh_token":"rt-e2","expires_at":1893456000},
+		{"uid":"e3","access_token":"at-e3","refresh_token":"rt-e3","expires_at":1893456000}
+	]`, 3, 3)
+
+	get := func(q string) (*httptest.ResponseRecorder, exportResp) {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/panel/api/export/accounts"+q, nil)
+		req.Header.Set("Authorization", "Bearer test-key")
+		rec := httptest.NewRecorder()
+		e.panel.ServeHTTP(rec, req)
+		var out exportResp
+		if rec.Code == http.StatusOK {
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatalf("bad export json: %v", err)
+			}
+		}
+		return rec, out
+	}
+
+	rec, out := get("?uids=e1,e3")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(out.Accounts) != 2 || out.Accounts[0].Account.UID != "e1" || out.Accounts[1].Account.UID != "e3" {
+		t.Fatalf("selected export=%+v，want 仅 e1/e3 且保持池内顺序", out.Accounts)
+	}
+
+	// 不认识的 UID 被忽略；剩下的有效选择照常导出。
+	rec, out = get("?uids=nope,e2")
+	if rec.Code != http.StatusOK || len(out.Accounts) != 1 || out.Accounts[0].Account.UID != "e2" {
+		t.Fatalf("partial selection code=%d accounts=%+v", rec.Code, out.Accounts)
+	}
+
+	// 全部匹配不到：400，前端据此提示刷新，而不是下载空文件。
+	rec, _ = get("?uids=nope1,nope2")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("no match code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 不带 uids 仍然导出全部（兼容旧行为）。
+	rec, out = get("")
+	if rec.Code != http.StatusOK || len(out.Accounts) != 3 {
+		t.Fatalf("export all code=%d n=%d", rec.Code, len(out.Accounts))
+	}
+}

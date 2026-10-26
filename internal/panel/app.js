@@ -8,6 +8,9 @@ let overviewData = null, cfgLoaded = null;
    tbody，这些必须存在 DOM 之外，否则刚测出来的结果、刚选的分组会被下一轮刷新抹掉。
    accGroupFilter：null = 全部；'' = 未分组；其它 = 分组名。 */
 let groupsData = [], accGroupFilter = null, metaUID = null;
+// 账号池的本地筛选：关键词（备注/昵称/uid，空格分词 AND）与状态。
+// 只影响查看范围，不改变服务端分组/调用池。
+let accQuery = '', accStatus = '';
 /* 默认调用池（服务端 state.json 的 active_group）。空串 = 全池；null = 还没从
    /pool/active 读到。poolGroups 是该接口顺带回的分组计数，只用于切换下拉；
    activePoolReady 保证「筛选自动跟到当前池」只在首次加载发生一次，之后 5s
@@ -35,6 +38,8 @@ let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'defaul
 const restOpen = Object.create(null);
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let mdLocks = [], mdRecent = [];
+// 单模型「验证」结果与进行中标记（仅本次页面会话有效；不写回服务端证据）。
+const mdVerify = Object.create(null), mdVerifyBusy = Object.create(null);
 let reqFilter = { q: '', outcome: '' };
 let reqEntries = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
@@ -118,20 +123,54 @@ async function api(path, opts = {}) {
   return d;
 }
 /* ── 侧栏收起（桌面图标模式）────────────────────────────────────────
-   状态存 localStorage：刷新后保持上次选择。窄屏不看这个开关（移动端用抽屉）。 */
-try {
-  if (localStorage.getItem('wb2api.navRail') === '1' && typeof document.querySelector === 'function') {
-    const shell = document.querySelector('.shell');
-    if (shell) shell.classList.add('rail');
+   状态存 localStorage：刷新后保持上次选择。窄屏不看这个开关（移动端用抽屉）。
+   两个入口共用同一套状态：顶栏按钮 #btnRail，以及侧栏顶部的品牌图标 #brandToggle
+   （收起成图标条后，点最上面那个图标就能展开，不用再去找顶栏按钮）。 */
+const shellEl = typeof document.querySelector === 'function' ? document.querySelector('.shell') : null;
+function railSet(on, persist) {
+  if (!shellEl) return;
+  shellEl.classList.toggle('rail', !!on);
+  if (persist !== false) {
+    try { localStorage.setItem('wb2api.navRail', on ? '1' : '0'); } catch (e) {}
   }
-} catch (e) {}
-if ($('btnRail')) $('btnRail').onclick = () => {
-  if (typeof document.querySelector !== 'function') return;
-  const shell = document.querySelector('.shell');
-  if (!shell) return;
-  const railed = shell.classList.toggle('rail');
-  try { localStorage.setItem('wb2api.navRail', railed ? '1' : '0'); } catch (e) {}
-};
+  // aria-expanded 表达的是「侧栏是否展开」，按钮与品牌图标保持一致。
+  const expanded = String(!on);
+  const railBtn = $('btnRail');
+  if (railBtn) {
+    railBtn.setAttribute('aria-expanded', expanded);
+    railBtn.title = on ? '展开导航' : '收起导航';
+  }
+  const brand = $('brandToggle');
+  if (brand) {
+    brand.setAttribute('aria-expanded', expanded);
+    brand.title = on ? '展开侧边栏' : '收起侧边栏';
+  }
+}
+try {
+  railSet(localStorage.getItem('wb2api.navRail') === '1', false);
+} catch (e) {
+  railSet(false, false);
+}
+function toggleRail() {
+  if (!shellEl) return;
+  railSet(!shellEl.classList.contains('rail'));
+}
+if ($('btnRail')) $('btnRail').onclick = toggleRail;
+if ($('brandToggle')) {
+  const brandToggle = () => {
+    // 桌面：展开/收起图标条；移动端抽屉没有 rail 形态，点顶部标题当作收起抽屉。
+    if (typeof matchMedia === 'function' && matchMedia('(min-width: 761px)').matches) toggleRail();
+    else navSet(false);
+  };
+  const brand = $('brandToggle');
+  brand.onclick = brandToggle;
+  brand.onkeydown = ev => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      brandToggle();
+    }
+  };
+}
 
 function toast(msg, cls, goView) {
   const el = document.createElement('div');
@@ -571,8 +610,8 @@ function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
     tb.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="big">' +
-      (filtered ? '该分组下还没有账号' : '账号池是空的') + '</div>' +
-      (filtered ? '换一个分组，或点账号行上的分组徽章调整归属' : '点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') +
+      (filtered ? '当前筛选下还没有账号' : '账号池是空的') + '</div>' +
+      (filtered ? '换个分组、清空搜索或状态筛选试试' : '点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') +
       '</div></td></tr>';
     syncAccSelHead(list);
     return;
@@ -745,21 +784,63 @@ function syncAccSelBar() {
   if (cnt) cnt.textContent = '已选 ' + n + ' 个';
   const mv = $('btnAccMove');
   if (mv) mv.disabled = n === 0;
+  // 导出按钮跟着选择走：有勾选就只导出勾选的，避免「勾了半天还是导出全池」。
+  const ex = $('btnExportAccounts');
+  if (ex) {
+    ex.textContent = n > 0 ? '导出已选' : '导出';
+    ex.title = n > 0
+      ? '只导出已勾选的 ' + n + ' 个账号（含 access/refresh token 明文）'
+      : '导出全部账号为 JSON（含 access/refresh token 明文，注意保管）';
+  }
 }
 
-// accVisibleList 当前筛选范围内的账号。全选、表头三态、批量移动都用同一口径，
-// 避免「看到 10 行、实际勾了整池 200 个」。
+// accStatusOf 账号状态归一到筛选下拉的四档：可用 / 冷却异常 / 暂停 / 禁用。
+// 冷却口径与 renderAccounts 的标签一致：限流、熔断、降权、保留积分、疑似登录失效
+// 都归为「冷却 / 异常」，避免筛选结果和行内标签对不上。
+function accStatusOf(s) {
+  if (!s) return '';
+  if (s.disabled) return 'disabled';
+  if (s.paused) return 'paused';
+  const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
+  const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
+  const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
+  if (s.cooling || cool > 0 || s.reserve_blocked || s.session_dead_fails > 0) return 'cooling';
+  return 'healthy';
+}
+
+// accMatchQuery 关键词匹配备注 / 昵称 / uid；空格分词后逐词 AND。
+function accMatchQuery(s, q) {
+  if (!q) return true;
+  const text = [s.note, s.nickname, s.uid].filter(Boolean).join(' ').toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every(k => text.includes(k));
+}
+
+// accScopeText 人话描述当前筛选范围（分组 + 状态 + 关键词），供批量弹框/提示复用。
+function accScopeText() {
+  const bits = [accGroupFilter == null ? '全部分组' : (accGroupFilter || '未分组')];
+  const stLabel = { healthy: '可用', cooling: '冷却/异常', paused: '暂停选号', disabled: '已禁用' }[accStatus] || '';
+  if (stLabel) bits.push(stLabel);
+  if (accQuery) bits.push('搜索「' + accQuery + '」');
+  return bits.join(' · ');
+}
+
+// accVisibleList 当前筛选范围内的账号（分组 + 关键词 + 状态）。全选、表头三态、
+// 批量操作都用同一口径，避免「看到 10 行、实际勾了整池 200 个」。
 function accVisibleList() {
   const all = (overviewData && overviewData.accounts) || [];
-  return accGroupFilter == null ? all
-    : all.filter(a => a && String(a.group == null ? '' : a.group) === accGroupFilter);
+  return all.filter(a => {
+    if (!a) return false;
+    if (accGroupFilter != null && String(a.group == null ? '' : a.group) !== accGroupFilter) return false;
+    if (accStatus && accStatusOf(a) !== accStatus) return false;
+    return accMatchQuery(a, accQuery);
+  });
 }
 
 // paintAccounts 统一出口：先按 accGroupFilter 过滤，再把测试状态一起交给 renderAccounts。
 // 所有重渲染（5s 轮询 / 切分组 / 测试结束）都走这里，避免某条路径漏传状态导致结果闪回。
 function paintAccounts() {
   const list = accVisibleList();
-  renderAccounts(list, accGroupFilter != null, { busy: probeBusy, res: probeResult });
+  renderAccounts(list, accGroupFilter != null || accQuery !== '' || accStatus !== '', { busy: probeBusy, res: probeResult });
 }
 
 // loadGroups 取分组计数（GET /groups）。失败保留旧列表：后端未就绪时筛选停在「全部」，
@@ -1013,9 +1094,7 @@ async function runProbeBan(uid) {
 
 async function runProbeAll() {
   if (probeAllRunning) return; // 已在跑：重复点击无副作用
-  const all = (overviewData && overviewData.accounts) || [];
-  const list = accGroupFilter == null ? all
-    : all.filter(a => a && String(a.group == null ? '' : a.group) === accGroupFilter);
+  const list = accVisibleList();
   if (!list.length) { toast('当前筛选范围内没有账号', 'warn'); return; }
   if (!confirm('将对当前筛选范围内的 ' + list.length + ' 个账号逐个测试。\n' +
     '正常账号会发一次真实对话（消耗额度），封禁/冷却账号只做只读解封探测。\n确认开始？')) return;
@@ -1132,7 +1211,7 @@ function openGroupPicker(uid, batch) {
   if ($('grpTitle')) $('grpTitle').textContent = grpBatch ? '移动 ' + n + ' 个账号' : '移动到分组';
   if ($('grpWho')) {
     $('grpWho').textContent = grpBatch
-      ? '已选 ' + n + ' 个账号 · 当前范围：' + (accGroupFilter == null ? '全部分组' : (accGroupFilter || '未分组'))
+      ? '已选 ' + n + ' 个账号 · 当前范围：' + accScopeText()
       : (acc.nickname || '未命名') + ' · ' + String(uid);
   }
   if ($('grpErr')) $('grpErr').hidden = true;
@@ -1332,13 +1411,19 @@ async function loadOverview(quiet) {
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     // 分组筛选 + 可用性测试状态在这里落地。用 typeof 兜底：顶层单测只切这一段 JS
     // 求值（沙箱里没有这些模块级变量），少了兜底整段渲染会被 try/catch 吞掉。
-    const filter = typeof accGroupFilter === 'undefined' ? null : accGroupFilter;
-    const all = d.accounts || [];
-    renderAccounts(
-      filter == null ? all : all.filter(a => a && String(a.group == null ? '' : a.group) === filter),
-      filter != null,
-      typeof probeBusy === 'undefined' ? undefined : { busy: probeBusy, res: probeResult },
-    );
+    // 账号表统一走 paintAccounts（分组 + 关键词 + 状态 + 测试结论），
+    // 单测沙箱里没有这套函数时退回旧的「仅分组」渲染。
+    if (typeof paintAccounts === 'function') {
+      paintAccounts();
+    } else {
+      const filter = typeof accGroupFilter === 'undefined' ? null : accGroupFilter;
+      const all = d.accounts || [];
+      renderAccounts(
+        filter == null ? all : all.filter(a => a && String(a.group == null ? '' : a.group) === filter),
+        filter != null,
+        typeof probeBusy === 'undefined' ? undefined : { busy: probeBusy, res: probeResult },
+      );
+    }
     renderModelLocks(d.model_locks);
     // 到期提醒随首页统计一起刷新：只用响应里已有的最早到期快照，零上游请求。
     renderExpirySnapshot(d);
@@ -1449,6 +1534,76 @@ if ($('accSelAll')) {
 }
 if ($('btnAccMove')) $('btnAccMove').onclick = () => openGroupPicker(null, true);
 if ($('btnAccSelClear')) $('btnAccSelClear').onclick = () => { accSel.clear(); paintAccounts(); };
+/* ── 账号搜索 / 状态筛选 ─────────────────────────────────────────────
+   只改本地查看范围。输入防抖 120ms；筛选变化时清空多选，避免把看不见的号
+   带进批量操作（与切换分组时的口径一致）。 */
+let accQTimer = null;
+if ($('accQ')) {
+  $('accQ').addEventListener('input', () => {
+    if (accQTimer) clearTimeout(accQTimer);
+    accQTimer = setTimeout(() => {
+      accQuery = ($('accQ').value || '').trim();
+      accSel.clear();
+      paintAccounts();
+    }, 120);
+  });
+}
+if ($('accStatus')) {
+  $('accStatus').onchange = () => {
+    accStatus = $('accStatus').value || '';
+    accSel.clear();
+    paintAccounts();
+  };
+}
+
+/* ── 批量操作（多选工具条）───────────────────────────────────────────
+   逐号调用既有的单号接口，并发 3；失败不中断其余账号，结束后汇总。
+   remove 会删 auths/ 下的凭证文件，确认文案单独加重。 */
+async function batchAccounts(kind) {
+  const labels = { disable: '禁用', pause: '暂停选号', revive: '解冻', remove: '移除' };
+  const label = labels[kind];
+  if (!label) return;
+  const uids = Array.from(accSel);
+  if (!uids.length) { toast('还没有勾选账号', 'warn'); return; }
+  const extra = kind === 'remove' ? '\n移除会删除 auths/ 下的凭证文件，不可恢复。' : '';
+  if (!confirm('将对已选 ' + uids.length + ' 个账号执行「' + label + '」。' + extra + '\n继续？')) return;
+
+  const btns = Array.from(document.querySelectorAll('[data-batch]'));
+  btns.forEach(b => { b.disabled = true; });
+  let ok = 0, fail = 0, next = 0;
+  const errs = [];
+  const worker = async () => {
+    while (next < uids.length) {
+      const uid = uids[next++];
+      try {
+        const body = kind === 'disable' ? JSON.stringify({ reason: '多选批量禁用' }) : undefined;
+        await api('accounts/' + encodeURIComponent(uid) + '/' + kind, { method: 'POST', body: body });
+        ok++;
+      } catch (e) {
+        fail++;
+        if (errs.length < 3) errs.push(String(uid).slice(0, 8) + '：' + e.message);
+      }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(3, uids.length) }, worker));
+    accSel.clear();
+    await loadOverview(true);
+    await loadGroups();
+    paintAccounts();
+    if (fail) {
+      toast('批量' + label + '：成功 ' + ok + ' 个，失败 ' + fail + ' 个'
+        + (errs.length ? '（' + errs.join('；') + '）' : ''), 'err');
+    } else {
+      toast('批量' + label + '完成：' + ok + ' 个账号', 'ok');
+    }
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+  }
+}
+Array.from(document.querySelectorAll('[data-batch]')).forEach(b => {
+  b.onclick = () => batchAccounts(b.dataset.batch);
+});
 // 多选开关：勾选列默认隐藏，点「多选」才出现；退出时清空选择，避免残留。
 if ($('btnSelMode')) $('btnSelMode').onclick = () => {
   selMode = !selMode;
@@ -1502,16 +1657,20 @@ if ($('newGrpName')) $('newGrpName').addEventListener('keydown', e => { if (e.ke
 
 /* ── 导出账号 ──────────────────────────────────────────────────────
    与导入同构（account + auth + group/note），导出后可原样再导入。
+   多选模式下有勾选就只导出勾选的账号；没有勾选则导出全部。
    文件含 token 明文，下载前明确确认。 */
 if ($('btnExportAccounts')) $('btnExportAccounts').onclick = async () => {
-  if (!confirm('导出文件包含 access / refresh token 明文，等同账号凭证，请妥善保管。继续导出？')) return;
+  const picked = typeof accSel === 'undefined' ? [] : Array.from(accSel);
+  const what = picked.length ? '已勾选的 ' + picked.length + ' 个账号' : '全部账号';
+  if (!confirm('将导出' + what + '。导出文件包含 access / refresh token 明文，等同账号凭证，请妥善保管。继续导出？')) return;
   const b = $('btnExportAccounts');
   b.disabled = true;
   try {
     const h = {};
     const k = localStorage.getItem(LS_KEY);
     if (k) h['Authorization'] = 'Bearer ' + k;
-    const r = await fetch('/panel/api/export/accounts', { headers: h });
+    const qs = picked.length ? '?uids=' + encodeURIComponent(picked.join(',')) : '';
+    const r = await fetch('/panel/api/export/accounts' + qs, { headers: h });
     if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const blob = await r.blob();
@@ -1526,7 +1685,7 @@ if ($('btnExportAccounts')) $('btnExportAccounts').onclick = async () => {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    toast('已导出 ' + name, 'ok');
+    toast('已导出' + what + '（' + name + '）', 'ok');
   } catch (e) {
     toast('导出失败：' + e.message, 'err');
   } finally {
@@ -1732,7 +1891,9 @@ function imageRateCell(m) {
 
 async function loadModels(force) {
   const tb = $('mdBody');
-  tb.innerHTML = '<tr><td colspan="7"><div class="empty">正在向上游查询…</div></td></tr>';
+  // 重新拉目录后旧的验证结论可能对应已下架/改权限的模型，清掉避免误导。
+  for (const k of Object.keys(mdVerify)) delete mdVerify[k];
+  tb.innerHTML = '<tr><td colspan="8"><div class="empty">正在向上游查询…</div></td></tr>';
   try {
     // 探测、模型锁与最近请求都是本地可选增强：任一失败不影响模型目录本身。
     // 可用性标签不额外发推理请求，只用模型锁和最近真实请求结果合成。
@@ -1758,7 +1919,7 @@ async function loadModels(force) {
     mdLocks = Array.isArray(st.model_locks) ? st.model_locks : [];
     mdRecent = Array.isArray(rm.recent) ? rm.recent : [];
     if (!mdAll.length) {
-      tb.innerHTML = '<tr><td colspan="7"><div class="empty">上游未返回模型</div></td></tr>';
+      tb.innerHTML = '<tr><td colspan="8"><div class="empty">上游未返回模型</div></td></tr>';
       $('mdCount').textContent = '';
       $('mdNote').textContent = '上游未返回模型';
       return;
@@ -1774,15 +1935,15 @@ async function loadModels(force) {
     renderModels();
   } catch (e) {
     mdAll = [];
-    // 模型清单是拿池里的可用账号去上游实时拉的（/panel/api/models 直连上游）。
-    // 池里没号/全被禁时拉不到，只说「fetch models: ...」没人看得懂，直接给结论。
-    const noAccount = /没有可用账号/.test(e.message || '');
-    tb.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="big">' +
-      (noAccount ? '拿不到模型目录：池里没有可用账号' : '拿不到模型目录') + '</div>' +
-      (noAccount ? '模型清单要用可用账号向上游实时查询。先把账号解封 / 添加可用的号，再点右上角「重新获取」。' : esc(e.message)) +
+    // 模型清单要用池里的账号向上游实时拉（/panel/api/models 直连上游）：健康号优先，
+    // 全被禁/冷却时后端会用这些号兜底；只有池子一个号都没有才必然拉不到。
+    const noAccount = /没有账号/.test(e.message || '');
+    tb.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="big">' +
+      (noAccount ? '拿不到模型目录：池里没有账号' : '拿不到模型目录') + '</div>' +
+      (noAccount ? '模型清单要用账号向上游实时查询。先添加账号，再点右上角「重新获取」。' : esc(e.message)) +
       '</div></td></tr>';
     $('mdCount').textContent = '';
-    if ($('mdWarn')) { $('mdWarn').hidden = false; $('mdWarn').textContent = noAccount ? '没有可用账号，无法拉取上游模型目录' : '拉取模型目录失败：' + e.message; }
+    if ($('mdWarn')) { $('mdWarn').hidden = false; $('mdWarn').textContent = noAccount ? '池里没有账号，无法拉取上游模型目录' : '拉取模型目录失败：' + e.message; }
   }
 }
 
@@ -1843,22 +2004,24 @@ function mdSortList(list, f) {
   return out;
 }
 
-// mdAvailabilityOf 合成 Global 模型当前可用性：模型锁优先于最近请求结果。
+// mdAvailabilityOf 合成模型当前可用性（CN / Global 同口径）：模型锁优先于最近请求。
 // 只返回有真实本地证据的状态；目录中存在但从未请求过的模型标为“待验证”，
 // 避免把“上游列出了模型”误当成“当前账号有权限”。
 function mdAvailabilityOf(m, locks, recent) {
   const id = String((m && m.id) || '');
-  if (!id.startsWith('global:')) return null;
-  locks = Array.isArray(locks) ? locks : mdLocks;
-  recent = Array.isArray(recent) ? recent : mdRecent;
-  const bare = id.slice('global:'.length);
-  const lock = locks.find(r => r && r.realm === 'global' && r.model === bare);
+  const sep = id.indexOf(':');
+  if (sep <= 0) return null;
+  const realm = id.slice(0, sep);
+  const bare = id.slice(sep + 1);
+  locks = Array.isArray(locks) ? locks : (typeof mdLocks === 'undefined' ? [] : mdLocks);
+  recent = Array.isArray(recent) ? recent : (typeof mdRecent === 'undefined' ? [] : mdRecent);
+  const lock = locks.find(r => r && r.realm === realm && r.model === bare);
   if (lock) {
     const reason = String(lock.reason || '').trim();
     const lower = reason.toLowerCase();
     if (lock.state === 'partial') {
       return { key: 'partial', label: '部分可用', cls: 'warn',
-        tip: '仍有 ' + Number(lock.servable || 0) + ' 个 global 账号可服务；已锁 ' + Number(lock.locked || 0) + ' 个' + (reason ? '；' + reason : '') };
+        tip: '仍有 ' + Number(lock.servable || 0) + ' 个 ' + realm + ' 账号可服务；已锁 ' + Number(lock.locked || 0) + ' 个' + (reason ? '；' + reason : '') };
     }
     if (lock.state === 'starved') {
       return { key: 'starved', label: '账号暂不可用', cls: 'mute',
@@ -1866,7 +2029,7 @@ function mdAvailabilityOf(m, locks, recent) {
     }
     if (lower.startsWith('11158') || lower.includes('not allowed for user type')) {
       return { key: 'denied', label: '无权限', cls: 'bad',
-        tip: '当前 global 账号类型不支持该模型' + (reason ? '；' + reason : '') };
+        tip: '当前账号类型不支持该模型' + (reason ? '；' + reason : '') };
     }
     if (lower.startsWith('11102') || lower.includes('service info not found')) {
       return { key: 'missing', label: '上游无此模型', cls: 'bad',
@@ -1875,7 +2038,9 @@ function mdAvailabilityOf(m, locks, recent) {
     return { key: 'limited', label: '限流/不可用', cls: 'warn',
       tip: '模型级冷却中' + (reason ? '；' + reason : '') };
   }
-  const ev = recent.find(e => e && e.model === id);
+  // 客户端常传裸模型名：新记录带 realm，可把裸名安全归域；旧记录没有 realm，
+  // 只认完整 id，避免把同名 CN/Global 模型串成一条证据。
+  const ev = recent.find(e => e && (e.model === id || (e.realm === realm && e.model === bare)));
   if (ev) {
     const status = Number(ev.status || 0);
     const when = ev.time ? new Date(ev.time).toLocaleString('zh-CN', { hour12: false }) : '';
@@ -1931,19 +2096,29 @@ function mdRowHtml(m, pr) {
   // 行高只有 17px，而胶囊是 22px —— 胶囊溢出到下一行，把下面模型的字压住。
   const capHtml = caps.length ? '<div class="md-caps">' + caps.join('') + '</div>' : '';
   const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
+  // 单模型验证：独立一列的小按钮，不占模型名宽度、不额外增加行高。
+  const vr = typeof mdVerify === 'undefined' ? null : mdVerify[m.id];
+  const vBusy = typeof mdVerifyBusy !== 'undefined' && !!mdVerifyBusy[m.id];
+  const vText = vBusy ? '验证中…' : (vr ? (vr.ok ? '已验证' : '验证失败') : '验证');
+  const vCls = 'md-verify' + (vr ? (vr.ok ? ' ok' : ' bad') : '');
+  const vTip = vr ? esc(vr.tip || '') : '向该模型发一条最小对话，验证此刻是否可调通（可能消耗少量积分）';
+  // 出图模型走 /v1/images 端点，chat 验证必然 11102/14401，不提供按钮。
+  const vBtn = m.image_generation ? '' :
+    '<button class="' + vCls + '" data-verify="' + esc(m.id) + '"' + (vBusy ? ' disabled' : '') +
+    ' title="' + vTip + '">' + vText + '</button>';
   return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
     '<td class="num">' + rateCell(m) + '</td>' +
     '<td>' + (m.default_effort && !m.image_generation ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
     '<td class="efs" style="white-space:normal">' + effs + '</td>' +
     '<td class="num">' + (m.context_length ? Math.round(m.context_length / 1000) + 'K' : '—') + '</td>' +
-    outCell(m, pr) + '</tr>';
+    outCell(m, pr) + '<td class="c-verify">' + vBtn + '</td></tr>';
 }
 
 function renderModels() {
   const tb = $('mdBody');
   const list = mdSortList(mdAll.filter(m => mdMatch(m)));
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="7"><div class="empty">没有符合当前筛选条件的模型</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="8"><div class="empty">没有符合当前筛选条件的模型</div></td></tr>';
   } else {
     tb.innerHTML = list.map(m => mdRowHtml(m, mdProbeOf(m.id))).join('');
   }
@@ -1974,6 +2149,33 @@ for (const [id, key] of [['mdRealm', 'realm'], ['mdCap', 'cap'], ['mdEffort', 'e
 }
 $('mdReset').onclick = resetModelFilter;
 $('btnModels').onclick = () => loadModels(true);
+
+// 单模型验证：点击「验证」→ 后端发一条 max_tokens=16 的对话；结果只影响本页标签。
+if ($('mdBody')) $('mdBody').addEventListener('click', async ev => {
+  const b = ev.target.closest('button[data-verify]');
+  if (!b) return;
+  const id = b.dataset.verify;
+  if (!id || mdVerifyBusy[id]) return;
+  if (!confirm('将向 ' + id + ' 发一条最小对话验证（可能消耗少量积分）。继续？')) return;
+  mdVerifyBusy[id] = true;
+  renderModels();
+  try {
+    const r = await api('models/verify', { method: 'POST', body: JSON.stringify({ model: id }) });
+    const who = r.account ? (r.account.note || r.account.nickname || r.account.uid || '') : '';
+    mdVerify[id] = {
+      ok: !!r.ok,
+      tip: r.ok
+        ? '验证成功' + (who ? ' · ' + who : '') + ' · ' + (r.latency_ms || 0) + 'ms'
+        : '验证失败：' + (r.error || '未知错误'),
+    };
+    toast(r.ok ? '模型 ' + id + ' 已验证可用' : '模型 ' + id + ' 验证失败：' + (r.error || ''), r.ok ? 'ok' : 'err');
+  } catch (e) {
+    toast('验证失败：' + e.message, 'err');
+  } finally {
+    delete mdVerifyBusy[id];
+    renderModels();
+  }
+});
 
 /* ── 日志（频道：全部/任务/对话/系统） ─────────────────────────────── */
 let logCh = 'all';
@@ -2645,6 +2847,8 @@ $('importFile').onchange = async () => {
     fd.append('file', file);
     // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
     if (importGroup) fd.append('group', importGroup);
+    // 批量迁移默认允许跳过逐号上游调用，避免导入 100 个号时串行签到/查余额。
+    if ($('importSkipTasks') && $('importSkipTasks').checked) fd.append('skip_tasks', '1');
     try {
       const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
       const d = await r.json().catch(() => ({}));
@@ -2693,6 +2897,9 @@ $('btnRefresh').onclick = async () => {
 
 /* ── 轮询 ─────────────────────────────────────────────────────────── */
 function refreshVisible() {
+  // 后台标签页不轮询：5s 一次的 overview 在 200 个号时也是几百 KB，
+  // 切回来时靠 visibilitychange 立即补一次，不会看到旧数据。
+  if (typeof document !== 'undefined' && document.hidden) return;
   if (view === 'accounts') {
     loadOverview(true);
     // 分组计数（total/healthy）是服务端内存聚合，不打上游；随账号池一起走 5s 刷新。
@@ -2716,6 +2923,11 @@ function start() {
   loadGroups();
   if (refTimer) clearInterval(refTimer);
   refTimer = setInterval(refreshVisible, 5000);
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshVisible();
+    });
+  }
   checkAuthGate();
 }
 async function checkAuthGate() {
