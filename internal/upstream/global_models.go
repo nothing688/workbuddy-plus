@@ -67,9 +67,9 @@ type fetchGlobalModelsCache struct {
 
 // 目录来源标识（fetchGlobalModelsCache.source）。
 const (
-	globalCatalogSourceDesktop    = "v3-desktop"   // 桌面端 UA 族权威目录（官方 picker 口径）
-	globalCatalogSourceUnion      = "v3-union"     // 桌面族探测失败的回落：IDE+CLI 并集
-	globalCatalogSourceEnterprise = "enterprise"   // v3 全失败，只剩企业端点（窄目录 + 旧倍率）
+	globalCatalogSourceDesktop    = "v3-desktop" // 桌面端 UA 族权威目录（官方 picker 口径）
+	globalCatalogSourceUnion      = "v3-union"   // 桌面族探测失败的回落：IDE+CLI 并集
+	globalCatalogSourceEnterprise = "enterprise" // v3 全失败，只剩企业端点（窄目录 + 旧倍率）
 )
 
 // GlobalCatalogSource 返回最近一次成功探测的目录来源（空 = 尚未探测）。

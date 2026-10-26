@@ -4,12 +4,9 @@ WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY . .
-# 版本号由 CI 注入（main 构建传 sha-xxxxxxx，tag 构建传时间版本）；不传则 dev。
-# 面板「维护 → 热更新」会拿它跟 GitHub Release 比较，镜像里如果恒为 dev，
-# 每次检查都会显示「有更新」。
-ARG VERSION=dev
+ARG APP_VERSION=dev
 # 一次编译全部二进制（工具进镜像，容器内可直接跑脚本）。全部 -trimpath -s -w。
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.appVersion=${VERSION}" -o /out/wb2api ./cmd/server \
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.appVersion=${APP_VERSION}" -o /out/wb2api ./cmd/server \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit

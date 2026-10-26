@@ -3,7 +3,7 @@ name: docker-ghcr
 # 多架构镜像（amd64/arm64）自动构建并发布到 ghcr.io：
 #   - push 到 main / 打 v* tag / 手动触发 → 构建并推送
 #   - PR 触碰构建相关文件 → 仅构建验证，不推送
-# tag 说明：main 推 latest + main + sha-xxxxxx；v1.2.3 推 1.2.3 / 1.2 / 1
+# tag 说明：main 推 latest + main + sha-xxxxxx；时间标签 v2026.9.26.711 推同名镜像 tag
 on:
   push:
     branches: [main]
@@ -61,6 +61,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "APP_VERSION=$(TZ=Asia/Shanghai date +%Y.%-m.%-d.%-H%M)" >> "$GITHUB_ENV"
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -69,28 +77,15 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=v(.*),group=1
             type=sha,format=short
-
-      # 版本号：tag 构建用 tag（去掉 v），main/手动构建用 sha-xxxxxxx。
-      # 注入后面板显示真实版本，热更新比较也才有意义（镜像里恒为 dev 会永远提示有更新）。
-      - name: Resolve build version
-        id: ver
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          build-args: |
-            VERSION=${{ steps.ver.outputs.version }}
+          build-args: APP_VERSION=${{ env.APP_VERSION }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

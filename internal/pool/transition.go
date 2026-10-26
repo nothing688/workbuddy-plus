@@ -28,7 +28,12 @@
 //     （详见 reviveCoolingLocked 注释）。
 package pool
 
-import "time"
+import (
+	"log"
+	"time"
+
+	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
+)
 
 // clearCoolingLocked 清冷却域：until/coolKind/softStreak/modelCooldowns 全归零，
 // reason 一并清空。熔断器（fails/retryCount/breakerUntil）不属冷却域，不动。
@@ -70,6 +75,9 @@ func (p *Pool) disableLocked(e *entry, reason string) {
 	// 两者处置优先级差很远（后者往往意味着没人看面板）。
 	e.disabledAt = time.Now()
 	p.dirty.Store(true)
+	// 禁用是需人工 revive 的终态，journal 里必须留痕：否则「号没了」只能靠轮询
+	// 面板发现，事后排障连时刻与原因都查不到。
+	log.Printf("WARN: [pool] 账号被禁用 acct=%s reason=%s（revive 前不再参与选号）", logfmt.Label(e.a.UID, e.a.Nickname), reason)
 }
 
 // restoreGroupLocked 恢复禁用期间被移入 DisabledGroup 的分组：有书签则回归

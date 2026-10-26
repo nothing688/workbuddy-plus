@@ -4,6 +4,7 @@
 //   - config.json 的 api_key 是**管理员总钥匙**，照旧全权放行、零回归；
 //   - 本包的 key 是**分发给使用者的子钥匙**，前缀 wbk_，各自带积分额度、
 //     token 额度、IP 名单、模型白名单、版本归属、有效期。
+//
 // 鉴权顺序：先判 wbk_ 前缀 → 命中走本包；否则回退原 api_key 校验。
 //
 // 口径与 workbuddy-manager 的 key 分发对齐：
@@ -40,8 +41,8 @@ const Prefix = "wbk_"
 type Key struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
-	Hash        string   `json:"hash"`         // sha256(明文)，不存明文
-	Prefix      string   `json:"prefix"`       // 展示用：明文前 12 字符
+	Hash        string   `json:"hash"`   // sha256(明文)，不存明文
+	Prefix      string   `json:"prefix"` // 展示用：明文前 12 字符
 	Enabled     bool     `json:"enabled"`
 	ExpiresAt   string   `json:"expires_at"`   // RFC3339；空 = 不过期
 	MaxIPs      int      `json:"max_ips"`      // 0 = 不限

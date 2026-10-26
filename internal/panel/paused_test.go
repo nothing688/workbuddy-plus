@@ -116,6 +116,7 @@ const tb = { innerHTML: '' };
 const ctx = {
   String, Number, Math, Date, Object, Array, JSON, RegExp, console,
   $: id => (id === 'accBody' ? tb : null),
+  setHTML: (el, html) => { el.innerHTML = html; },
   esc: s => String(s == null ? '' : s), dur: () => '1m', ago: () => '刚刚',
   remarkName: (uid, html) => html, // 备注是展示层增强，本测试只关心 paused 徽标/按钮
   rateLimitRowsHtml: () => '', formatTokenCount: () => '0', formatLatency: () => '-', formatRate: () => '-',
@@ -175,6 +176,7 @@ assert.ok(start >= 0, 'ML_STATE not found');
 const host = { mlBody: { innerHTML: '' }, mlNote: { textContent: '' } };
 const ctx = { Object, Array, String, RegExp,
   $: id => host[id],
+  setHTML: (el, html) => { el.innerHTML = html; },
   esc: s => String(s == null ? '' : s),
   fmtLocalDateTime: ms => 'T(' + ms + ')' };
 vm.createContext(ctx);
@@ -248,7 +250,7 @@ func TestAppJSOverviewWiresModelLocks(t *testing.T) {
 const vm = require('vm');
 const assert = require('assert');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function overviewPath');
+const start = src.indexOf('async function loadOverview(');
 const end = src.indexOf("$('accBody').addEventListener");
 assert.ok(start >= 0 && end > start, 'loadOverview not found');
 const inert = new Proxy(function () {}, {
@@ -261,7 +263,8 @@ const fake = { version: 'v-test', total: 2, healthy: 2, cooling: 0, disabled: 0,
 const ctx = { Math, Object, Array, JSON, Number, String,
   api: async () => fake, $: () => inert, toast: () => {},
   renderAccounts: v => { accountsPainted = v; },
-  renderModelLocks: v => { painted = v; } };
+  renderModelLocks: v => { painted = v; },
+  overviewPath: () => 'overview' };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.loadOverview = loadOverview;', ctx);
 (async () => {

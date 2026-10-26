@@ -260,12 +260,12 @@ func acceptLanguageFor(a *auth.Auth) string {
 // X-Userinfo）。三个头都是**按账号形态条件发送**，不是常量——官方客户端的
 // runIdentityHeaders()（cli 5.8.4 模块 30876 反编译）等价于：
 //
-//   有 uid           → X-User-Id = uid
-//   有 enterpriseId  → X-Enterprise-Id = enterpriseId
-//   有 auth.method   → X-Auth-Method = method（= JWT 的 token_source 声明）
-//   有 idSource      → X-Id-Source = idSource
-//   有 uid 且 (enterpriseId 或 idSource 或 method 任一存在) →
-//       X-Userinfo = base64(JSON{uin, owner_uin?, id_source?, token_source?})
+//	有 uid           → X-User-Id = uid
+//	有 enterpriseId  → X-Enterprise-Id = enterpriseId
+//	有 auth.method   → X-Auth-Method = method（= JWT 的 token_source 声明）
+//	有 idSource      → X-Id-Source = idSource
+//	有 uid 且 (enterpriseId 或 idSource 或 method 任一存在) →
+//	    X-Userinfo = base64(JSON{uin, owner_uin?, id_source?, token_source?})
 //
 // X-Userinfo 的三段都是**条件拼接**：缺哪个字段就不出现在 JSON 里，而不是写空串。
 // 个人号三个维度全缺——实测国际版个人账号的出站头里这三头都不存在，故本函数对纯

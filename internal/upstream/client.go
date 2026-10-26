@@ -22,8 +22,8 @@ import (
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
 	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
-	"github.com/misakano7545/workbuddy2api-panel/internal/loginsite"
 	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
+	"github.com/misakano7545/workbuddy2api-panel/internal/loginsite"
 )
 
 // ErrKind 错误分类，pool 据此决定冷却时长。
@@ -893,9 +893,17 @@ type CreditObserver func(uid string, credits int64)
 func New() *Client {
 	tr := newTransport()
 	c := &Client{
-		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:      &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
-		ChatBaseCN:    "https://copilot.tencent.com",
+		HTTP:     &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP: &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		// ChatBaseCN 取官方桌面端的 endpoint（product.json），不是备选入口
+		// copilot.tencent.com —— 后者是官方 NetworkFailover 里的备选，主入口才是
+		// www.workbuddy.cn。生产实测（同一账号）：/v3/config、billing 汇总、chat
+		// 三条路径两个域返回一致，workbuddy.cn 对海外出口也不复位握手（见
+		// cmd/server/config.go 的 cn.chat_base 注释）。
+		ChatBaseCN: "https://www.workbuddy.cn",
+		// BillingBaseCN 保持 www.codebuddy.cn：任务计分按「CLI 指纹在 codebuddy.cn、
+		// 桌面指纹在 chat 域、web 指纹在 workbuddy.cn」三类区分（README「任务计分」），
+		// 改这里会连带改掉 CLI 类任务的指纹来源。
 		BillingBaseCN: "https://www.codebuddy.cn",
 		WebBaseCN:     "https://www.workbuddy.cn",
 		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：
@@ -1418,7 +1426,8 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 	// （官方桌面端头与体都带 conversationRequestId）。见 conv_fields.go。
 	prepared = injectConversationFields(prepared, meta.ConversationRequestID)
 	if timing != nil {
-		timing.Prep += time.Since(prepStart)
+		// Zero means unmeasured; coarse clocks can report zero for completed work.
+		timing.Prep += max(time.Since(prepStart), time.Nanosecond)
 		timing.RequestedEffort = requested // 客户端原始档位（未携带 → 空）
 		timing.Effort = effort             // 生效档位（可能被降级；空 = 未参与降级）
 	}
@@ -1442,7 +1451,7 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 		doStart := time.Now()
 		resp, err := c.chatHTTP().Do(req)
 		if timing != nil {
-			timing.Do += time.Since(doStart)
+			timing.Do += max(time.Since(doStart), time.Nanosecond)
 		}
 		if err != nil {
 			cancel()
@@ -1839,9 +1848,9 @@ type v3ModelPromotion struct {
 	// id+name+tags）。实测 2026-10-22：global 的 hy-image-3.5 只出现在这里、
 	// data.models 里没有——只按 models 解析会得出「国际版没有出图模型」的假
 	// 结论（实际可调：200 + usage{output_image_tokens:15000, credit:0.27}）。
-	ID   string   `json:"id"`
-	Name string   `json:"name"`
-	Tags []string `json:"tags"`
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Tags  []string `json:"tags"`
 	Badge *struct {
 		Label string `json:"label"`
 	} `json:"badge"`

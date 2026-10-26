@@ -133,7 +133,6 @@ func (p *Pool) GroupCounts() []GroupInfo {
 	return out
 }
 
-
 // CreateGroup 手工创建一个分组（可暂无账号）。名字 trim 后为空返回 false；
 // 已存在（有账号或已声明）视为成功（幂等）。空分组随 state.json 持久化。
 func (p *Pool) CreateGroup(name string) bool {
