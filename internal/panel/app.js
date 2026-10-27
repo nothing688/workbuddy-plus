@@ -1440,15 +1440,24 @@ if ($('grpNew')) $('grpNew').addEventListener('keydown', e => { if (e.key === 'E
 // renderModelLocks 模型锁池：哪些模型不能用、锁了几个号、还要锁多久。后端已按
 // 「整池不可用 → 此刻没号 → 部分限流」排好序，这里只做展示（移植上游 PR #120）。
 const ML_STATE = { locked: ['bad', '全池锁定'], starved: ['warn', '此刻无号'], partial: ['ok', '部分限流'] };
-function renderModelLocks(rows) {
+function renderModelLocks(rows, breakers) {
   const tb = $('mlBody');
   const list = Array.isArray(rows) ? rows : [];
+  // 分组熔断清单（overview.group_breakers）：分组对该模型全组冷却，请求正在改道
+  // 组外。这里只在标题旁提示数量，hover 看明细——锁池表本身是按模型维度的，
+  // 不混入分组行。
+  const broken = Array.isArray(breakers) ? breakers : [];
   // 锁池现在按「查看分组」统计；把范围写在标题旁，避免误以为还是全池。
   const grouped = typeof accGroupFilter !== 'undefined' && accGroupFilter != null;
   const scope = grouped ? (accGroupFilter || '未分组') : '';
-  $('mlNote').textContent = list.length
+  const base = list.length
     ? list.length + ' 个模型受限' + (scope ? ' · ' + scope : '')
     : (scope ? scope + '：无模型受限' : '');
+  $('mlNote').textContent = base +
+    (broken.length ? ' · ' + broken.length + ' 个分组已熔断（改道组外）' : '');
+  $('mlNote').title = broken.length
+    ? broken.map(b => b.group + ' · ' + b.model + ' · ' + (b.count || 0) + ' 号冷却').join('\n')
+    : '';
   if (!list.length) {
     setHTML(tb, '<tr><td colspan="8"><div class="empty">' +
       (scope ? '当前分组（' + esc(scope) + '）没有模型级限流 —— 该分组所有模型均可选'
@@ -1683,7 +1692,7 @@ async function loadOverview(quiet) {
         typeof probeBusy === 'undefined' ? undefined : { busy: probeBusy, res: probeResult },
       );
     }
-    renderModelLocks(d.model_locks);
+    renderModelLocks(d.model_locks, d.group_breakers);
     // 到期提醒随首页统计一起刷新：只用响应里已有的最早到期快照，零上游请求。
     renderExpirySnapshot(d);
   } catch (e) {
@@ -2858,6 +2867,7 @@ const CFG_MAP = {
   cost_explore_interval: ['pool', 'cost_explore_interval'],
   credit_floor: ['pool', 'credit_floor'], credit_floor_max_rate: ['pool', 'credit_floor_max_rate'],
   prefer_expiring: ['pool', 'prefer_expiring'], expiring_soon: ['pool', 'expiring_soon'],
+  group_breaker: ['pool', 'group_breaker'],
   soft_rate: ['cooldown', 'soft_rate'], soft_rate_max: ['cooldown', 'soft_rate_max'],
   breaker_cooldown: ['pool', 'breaker_cooldown'], breaker_cooldown_max: ['pool', 'breaker_cooldown_max'],
   idle_weight_per_hour: ['pool', 'idle_weight_per_hour'], idle_weight_max: ['pool', 'idle_weight_max'],
@@ -3256,17 +3266,10 @@ $('importFile').onchange = async () => {
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
-$('btnRefresh').onclick = async () => {
-  const b = $('btnRefresh');
-  b.disabled = true; b.title = '刷新中…';
-  try {
-    await api('balance_all', { method: 'POST' });
-    await loadOverview(true);
-    toast('余额已从上游刷新', 'ok');
-  } catch (e) { toast('刷新失败：' + e.message, 'err'); await loadOverview(true); }
-  finally { b.disabled = false; b.title = '刷新'; }
-  if (view === 'logs') loadLogs();
-};
+// 顶部刷新 = 整页重载：连静态资源与内存态（筛选/排序/日志游标）一起重置。
+// 不再顺带打 balance_all——余额由后台定时刷新与账号行「余额」按钮负责，
+// 5 秒轮询只读内存，整页 reload 也不会触发上游对账。
+$('btnRefresh').onclick = () => location.reload();
 
 /* ── 轮询 ─────────────────────────────────────────────────────────── */
 // 页面隐藏时暂停轮询（perf）：浏览器把标签页切到后台时，本页仍然每 5 秒打一轮
@@ -4145,7 +4148,8 @@ function renderUsage(d) {
   renderUsageDim();
   renderCreditDim();
   renderUsageChart(usageData.series || []);
-  renderUsageHours(usageData.series || []);
+  // 按小时 × 模型的图（独立接口）：与主用量并行加载，失败只影响这张卡片。
+  loadUsageHourModels();
 }
 
 // 维度切换 / 排序控件。
@@ -4183,45 +4187,364 @@ if ($('usSort')) $('usSort').onchange = () => {
  * 与 hour 点在同一个连续轴上——日桶本来就是他那天所有小时的聚合。
  */
 
-/* renderUsageHours 填「积分与 token 按小时」表：直接消费 series 时序点（hour 点
-   一小时一行、day 点一行代表当天聚合），最新时段排在最上面。此前这张表只有静态
-   表头、没有任何渲染代码，用户永远看到一张空表。token/积分 = 合计 Token ÷ 该时段
-   实测扣除积分（兑换率），没有积分样本的时段留 —，不拿 0 顶替。 */
-function renderUsageHours(series) {
-  const body = $('usHourBody');
-  if (!body) return;
-  const rows = [];
-  for (const p of (series || [])) {
-    if (parsePointTime(p) !== null) rows.push(p);
+/* ── 按小时 × 模型的堆叠柱状图 ──────────────────────────────────────
+   每根柱子 = 一个小时，按模型分段堆叠；单位可切 请求 / Token / 积分。
+   模型列取窗口内请求数前 8，其余归「其他」；图例可点选显隐，柱子可点击看该
+   小时各模型明细；「放大」把卡片铺到整屏（Esc 还原），配合高度档位看细节。
+   数据来自 /panel/api/usage/hourly-models，不参与 5 秒轮询；窗口跟随顶部区间。 */
+let usHmData = null, usHmMetric = 'requests', usHmHeight = 220, usHmSel = '';
+const usHmHidden = new Set();
+const US_HM_METRIC = { requests: '请求', tokens: 'Token', credits: '积分' };
+const US_HM_UNIT = { requests: ' 次', tokens: '', credits: ' 积分' };
+// 分类色板：整体偏冷的清爽系，色相按相邻柱段拉开（蓝→翠→紫→天蓝→金→靛→粉→青），
+// 亮度统一在 60% 上下，饱和但不刺眼；「其他」用中性灰压底。
+const US_HM_COLORS = ['#4E8AF4', '#3FC98C', '#B06FE0', '#45B4E8',
+  '#F0A64B', '#7A6FF0', '#E87FA8', '#2EC4B6'];
+const US_HM_OTHER = '#9AA3AE';
+const US_HM_MAX_HOURS = 24 * 14;
+
+async function loadUsageHourModels() {
+  const q = trangeQuery('usRange', true);
+  try {
+    usHmData = await api('usage/hourly-models?' + q.toString());
+  } catch (e) {
+    usHmData = null;
+    const note = $('usHmNote');
+    if (note) note.textContent = '读取失败：' + (e.message || e);
   }
-  // 最新时段排最上面。后端 series 是「日桶升序 + 小时桶升序」两段拼接，简单 reverse
-  // 对混合窗口会错序，直接按时间戳降序排，与输入顺序解耦。
-  rows.sort((a, b) => parsePointTime(b) - parsePointTime(a));
-  body.innerHTML = rows.map(p => {
-    const tt = Number(p.total_tokens || 0);
-    const cr = Number(p.credits || 0);
-    return '<tr>' +
-      '<td class="mark" aria-hidden="true"></td>' +
-      '<td>' + esc(usHourLabel(p)) + '</td>' +
-      '<td class="num">' + fmtTok(p.requests) + '</td>' +
-      '<td class="num">' + fmtTok(p.prompt_tokens) + '</td>' +
-      '<td class="num">' + fmtTok(p.completion_tokens) + '</td>' +
-      '<td class="num">' + fmtTok(p.total_tokens) + '</td>' +
-      '<td class="num">' + (cr ? fmtCredit(p.credits) : '—') + '</td>' +
-      '<td class="num">' + (cr > 0 && tt > 0 ? fmtTok(tt / cr) : '—') + '</td>' +
-      '</tr>';
-  }).join('') || '<tr><td colspan="8" class="empty">暂无数据</td></tr>';
+  usHmSel = '';
+  renderUsageHourModels();
 }
 
-/* usHourLabel 时段列的完整标签：小时桶「MM-DD HH:00」（跨天窗口下只有 HH:00 分不清
-   是哪天），日桶「MM-DD」。t 的形态判别与 parsePointTime 同口径（长度 13 = 小时桶）。 */
-function usHourLabel(p) {
-  const s = p.t.length === 13 ? p.t + ':00:00' : p.t + 'T00:00:00';
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return p.t;
-  const day = (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0');
-  return p.scope === 'day' ? day : day + ' ' + String(d.getHours()).padStart(2, '0') + ':00';
+function usHmVal(c) {
+  c = c || {};
+  if (usHmMetric === 'credits') return Number(c.credits || 0);
+  if (usHmMetric === 'tokens') return Number(c.total_tokens || 0);
+  return Number(c.requests || 0);
 }
+
+function usHmFmt(v) {
+  if (usHmMetric === 'credits') return fmtCredit(v);
+  // 请求/Token 都是整数：四舍五入后再格式化，避免坐标轴/均值出现 150.666666。
+  return fmtTok(Math.round(Number(v) || 0));
+}
+
+function usHmColor(i) {
+  return i < US_HM_COLORS.length ? US_HM_COLORS[i] : US_HM_COLORS[US_HM_COLORS.length - 1];
+}
+
+/* usHmHourKey 本地小时键，与后端 scope「YYYY-MM-DDTHH」同形。 */
+function usHmHourKey(dt) {
+  const p = n => String(n).padStart(2, '0');
+  return dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate()) +
+    'T' + p(dt.getHours());
+}
+
+/* usHmSlots 把有数据的小时补成连续槽：断档的整点留空槽，时间轴保持等距。 */
+function usHmSlots(hours) {
+  const byT = new Map(hours.map(h => [String(h.t), h]));
+  const parseHour = t => new Date(String(t) + ':00:00');
+  const start = parseHour(hours[0].t), end = parseHour(hours[hours.length - 1].t);
+  const out = [];
+  for (let dt = new Date(start);
+       dt.getTime() <= end.getTime() && out.length < US_HM_MAX_HOURS;
+       dt.setHours(dt.getHours() + 1)) {
+    const copy = new Date(dt);
+    const key = usHmHourKey(copy);
+    out.push({ dt: copy, key, row: byT.get(key) || null });
+  }
+  return out;
+}
+
+function usHmLegendHtml(models, otherCount) {
+  const item = (key, name, color, off) =>
+    '<span class="lg' + (off ? ' off' : '') + '" data-key="' + esc(key) + '" title="点击显示 / 隐藏">' +
+    '<i class="sw" style="background:' + color + '"></i>' +
+    '<span class="lg-name">' + esc(name) + '</span></span>';
+  let html = models.map((m, i) =>
+    item(m.key, m.model || m.key, usHmColor(i), usHmHidden.has(m.key))).join('');
+  if (otherCount > 0) {
+    html += item('__other', '其他 ' + otherCount, US_HM_OTHER, usHmHidden.has('__other'));
+  }
+  return html;
+}
+
+/* usHmDetailHtml 点击某根柱子后的明细：一行一个模型，列对齐（名称 / 当前指标 /
+   请求 / Token / 积分）。「其他」展开成被折叠的具体模型（后端 other_refs +
+   row.other_cells），不再只给合计；图例里隐藏的模型在这里以淡化样式出现。 */
+function usHmDetailHtml(slot, allSeries, otherRefs) {
+  if (!slot) return '';
+  const row = slot.row || {};
+  const cells = row.cells || {};
+  const otherCells = row.other_cells || {};
+  const total = allSeries.reduce((a, it) => a + usHmVal(it.other ? row.other : cells[it.key]), 0);
+  const unit = US_HM_UNIT[usHmMetric] || '';
+  const line = (name, color, c, off) => {
+    const v = usHmVal(c);
+    if (!v) return '';
+    // 括号里只补当前指标之外的信息，避免「2 次（2 次 · …）」这种重复。
+    const bits = [];
+    if (usHmMetric !== 'requests') bits.push(fmtTok(c.requests) + ' 次');
+    if (c.errors) bits.push('失败 ' + fmtTok(c.errors));
+    if (usHmMetric !== 'tokens') bits.push(fmtTok(c.total_tokens) + ' tok');
+    if (usHmMetric !== 'credits') bits.push(fmtCredit(c.credits) + ' 积分');
+    return '<div class="it' + (off ? ' off' : '') + '">' +
+      '<i class="dot" style="background:' + color + '"></i>' +
+      '<span class="nm" title="' + esc(name) + '">' + esc(name) + '</span>' +
+      '<b>' + usHmFmt(v) + unit + '</b>' +
+      (bits.length ? '<span class="meta">' + bits.join(' · ') + '</span>' : '') + '</div>';
+  };
+  let rows = '';
+  for (const it of allSeries) {
+    if (it.other) continue; // 「其他」在下面逐个展开
+    rows += line(it.name, it.color, cells[it.key] || {}, usHmHidden.has(it.key));
+  }
+  const others = (otherRefs || [])
+    .map(r => ({ r, v: usHmVal(otherCells[r.key]), c: otherCells[r.key] || {} }))
+    .filter(x => x.v > 0)
+    .sort((a, b) => b.v - a.v);
+  if (others.length) {
+    for (const x of others) rows += line(x.r.key, US_HM_OTHER, x.c);
+  } else if (row.other && usHmVal(row.other) > 0) {
+    // 兼容旧服务端：没有 other_refs 时退回聚合行。
+    rows += line('其他', US_HM_OTHER, row.other);
+  }
+  if (!rows) rows = '<div class="it"><span class="note">该小时没有可显示的数据</span></div>';
+  return '<div class="hd"><b>' + esc(slot.key.replace('T', ' ')) + '</b>' +
+    '<span>合计 ' + usHmFmt(total) + unit + '</span></div>' +
+    '<div class="grid">' + rows + '</div>' +
+    '<div class="note">点同一根柱子或按 Esc 关闭</div>';
+}
+
+function renderUsageHourModels() {
+  const host = $('usHmChart');
+  if (!host) return;
+  const d = usHmData || {};
+  const models = Array.isArray(d.models) ? d.models : [];
+  const hours = (Array.isArray(d.hours) ? d.hours : []).filter(h => h && h.t);
+  const otherCount = Number(d.other_models || 0);
+  const metricName = US_HM_METRIC[usHmMetric] || '请求';
+
+  const legend = $('usHmLegend');
+  if (legend) legend.innerHTML = usHmLegendHtml(models, otherCount);
+  const note = $('usHmNote');
+  if (note) {
+    note.textContent = hours.length
+      ? hours.length + ' 个有数据的小时 · ' + models.length + ' 个模型' +
+        (otherCount ? '（另 ' + otherCount + ' 个并入其他）' : '') +
+        (d.truncated ? ' · 仅显示最近 14 天' : '')
+      : (usHmData ? '所选区间没有按小时数据' : '—');
+    note.title = '柱高 = 该小时的' + metricName + '；点图例显隐模型，点柱子看明细';
+  }
+  const detail = $('usHmDetail');
+  if (!hours.length) {
+    host.innerHTML = '<div class="us-empty">' +
+      (usHmData ? '所选区间没有按小时数据' : '读取中…') + '</div>';
+    if (detail) { detail.hidden = true; detail.innerHTML = ''; }
+    return;
+  }
+
+  const slots = usHmSlots(hours);
+  const allSeries = models.map((m, i) => ({
+    key: m.key, name: m.key || m.model, color: usHmColor(i), other: false,
+  }));
+  if (otherCount > 0) {
+    allSeries.push({ key: '__other', name: '其他 ' + otherCount, color: US_HM_OTHER, other: true });
+  }
+
+  let max = 0, selIdx = -1;
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i], row = s.row || {};
+    s.vals = allSeries.map(it => usHmVal(it.other ? row.other : (row.cells || {})[it.key]));
+    s.totalAll = s.vals.reduce((a, b) => a + b, 0);
+    s.totalVis = s.vals.reduce((a, v, k) => a + (usHmHidden.has(allSeries[k].key) ? 0 : v), 0);
+    if (s.totalVis > max) max = s.totalVis;
+    if (usHmSel && s.key === usHmSel) selIdx = i;
+  }
+  if (!usHmSel || selIdx < 0) { usHmSel = ''; selIdx = -1; }
+  if (detail) {
+    detail.hidden = selIdx < 0;
+    detail.innerHTML = selIdx >= 0 ? usHmDetailHtml(slots[selIdx], allSeries, d.other_refs || []) : '';
+  }
+  if (max <= 0) {
+    host.innerHTML = '<div class="us-empty">' +
+      (usHmHidden.size ? '已隐藏全部模型 —— 点击图例恢复' : '所选区间没有' + metricName + '数据') + '</div>';
+    return;
+  }
+
+  // 边距比 Token 时序略宽：这张图的刻度字号放大了一档，左侧要给 4 位数留位置，
+  // 底部要给 HH:00 留高度，否则文字会压到柱子或基线。
+  const W = 1200, H = Math.max(140, Number(usHmHeight) || 220);
+  const PL = 66, PR = 14, PT = 26, PB = 38;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const slotW = iw / slots.length;
+  const bw = Math.max(2, Math.min(26, slotW * 0.72));
+  const yBase = PT + ih;
+  const yOf = v => yBase - ih * (v / max);
+  const xOf = i => PL + slotW * i + slotW / 2;
+
+  let out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" preserveAspectRatio="xMidYMid meet">';
+
+  // y 轴网格 + 刻度
+  for (let i = 0; i <= 4; i++) {
+    const y = yBase - ih * i / 4;
+    out += '<line class="gl" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
+      '" y2="' + y.toFixed(1) + '"/>';
+    out += '<text class="tk" x="' + (PL - 6) + '" y="' + (y + 3.5).toFixed(1) +
+      '" text-anchor="end">' + usHmFmt(max * i / 4) + '</text>';
+  }
+
+  // 均值参考线（按可见列计算）
+  const avg = slots.reduce((a, s) => a + s.totalVis, 0) / slots.length;
+  if (avg > 0 && avg < max) {
+    const y = yOf(avg);
+    out += '<line class="avg" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
+      '" y2="' + y.toFixed(1) + '"/>';
+    out += '<text class="tk-avg" x="' + (PL + 5) + '" y="' + (y - 4).toFixed(1) +
+      '" text-anchor="start">均值 ' + usHmFmt(avg) + '</text>';
+  }
+
+  // 选中柱的背景高亮
+  if (selIdx >= 0) {
+    out += '<rect x="' + (PL + slotW * selIdx).toFixed(2) + '" y="' + PT + '" width="' +
+      slotW.toFixed(2) + '" height="' + ih + '" style="fill:var(--surface-2);opacity:.55"/>';
+  }
+
+  // 柱体：每根柱子一个 <g>，<title> 作为子节点（挂在 svg 根下会让所有柱子都
+  // 显示最后一条数据，见上方 Token 时序的踩坑记录）。
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i], row = s.row || {};
+    if (!s.totalVis) continue;
+    const x = xOf(i) - bw / 2;
+    const unit = US_HM_UNIT[usHmMetric] || '';
+    let tip = String(s.dt.getFullYear()) + '-' + String(s.dt.getMonth() + 1).padStart(2, '0') + '-' +
+      String(s.dt.getDate()).padStart(2, '0') + ' ' +
+      String(s.dt.getHours()).padStart(2, '0') + ':00 · 合计 ' + usHmFmt(s.totalVis) + unit;
+    let topIdx = -1;
+    for (let k = 0; k < allSeries.length; k++) {
+      if (!usHmHidden.has(allSeries[k].key) && s.vals[k] > 0) topIdx = k;
+    }
+    let rects = '', acc = 0;
+    for (let k = 0; k < allSeries.length; k++) {
+      const it = allSeries[k];
+      if (usHmHidden.has(it.key)) continue;
+      const v = s.vals[k];
+      if (v <= 0) continue;
+      const c = it.other ? (row.other || {}) : ((row.cells || {})[it.key] || {});
+      tip += '\n' + it.name + '：' + fmtTok(c.requests) + ' 次 · ' +
+        fmtTok(c.total_tokens) + ' tok · ' + fmtCredit(c.credits) + ' 积分';
+      const hgt = ih * (v / max);
+      rects += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - acc - hgt).toFixed(2) +
+        '" width="' + bw.toFixed(2) + '" height="' + Math.max(0.5, hgt).toFixed(2) +
+        '" fill="' + it.color + '"' + (k === topIdx ? ' rx="1.5"' : '') + '/>';
+      acc += hgt;
+    }
+    out += '<g data-t="' + esc(s.key) + '" style="cursor:pointer"><title>' + esc(tip) +
+      '</title>' + rects + '</g>';
+  }
+
+  // 峰值标注（可见列的总和）
+  let peakIdx = 0;
+  for (let i = 1; i < slots.length; i++) if (slots[i].totalVis > slots[peakIdx].totalVis) peakIdx = i;
+  {
+    const px = xOf(peakIdx), py = yOf(slots[peakIdx].totalVis);
+    const anchor = px > W - PR - 90 ? 'end' : 'middle';
+    out += '<text class="tk-peak" x="' + Math.max(PL, Math.min(W - PR, px)).toFixed(1) +
+      '" y="' + Math.max(10, py - 5).toFixed(1) + '" text-anchor="' + anchor + '">峰值 ' +
+      usHmFmt(slots[peakIdx].totalVis) + '</text>';
+  }
+
+  // x 轴基线
+  out += '<line class="ax" x1="' + PL + '" y1="' + yBase + '" x2="' + (W - PR) +
+    '" y2="' + yBase + '"/>';
+
+  // x 轴刻度：等距取 6 个槽（首尾靠边对齐防裁切）
+  const TICKS = Math.min(6, slots.length);
+  const usedTick = new Set();
+  for (let k = 0; k < TICKS; k++) {
+    const idx = TICKS === 1 ? 0 : Math.round(k * (slots.length - 1) / (TICKS - 1));
+    if (usedTick.has(idx)) continue;
+    usedTick.add(idx);
+    const cx = xOf(idx);
+    const anchor = cx < PL + 14 ? 'start' : (cx > W - PR - 14 ? 'end' : 'middle');
+    out += '<text class="tk" x="' + Math.max(PL, Math.min(W - PR, cx)).toFixed(1) +
+      '" y="' + (PT + ih + 15) + '" text-anchor="' + anchor + '">' +
+      esc(String(slots[idx].dt.getHours()).padStart(2, '0') + ':00') + '</text>';
+  }
+
+  // 跨天：日期标签 + 分隔线
+  let prevDay = null;
+  for (let i = 0; i < slots.length; i++) {
+    const dt = slots[i].dt;
+    const day = dt.getFullYear() + '-' + (dt.getMonth() + 1) + '-' + dt.getDate();
+    if (day === prevDay) continue;
+    if (prevDay !== null) {
+      const x = (PL + slotW * i).toFixed(1);
+      out += '<line class="gl" x1="' + x + '" y1="' + PT + '" x2="' + x + '" y2="' + yBase +
+        '" style="opacity:.45"/>';
+    }
+    const label = (dt.getMonth() + 1) + '-' + String(dt.getDate()).padStart(2, '0');
+    const lx = Math.max(PL, Math.min(W - PR - 34, xOf(i) - slotW / 2));
+    out += '<text class="tk" x="' + lx.toFixed(1) + '" y="' + (PT - 6) +
+      '" text-anchor="start" style="opacity:.75">' + esc(label) + '</text>';
+    prevDay = day;
+  }
+
+  out += '</svg>';
+  host.innerHTML = out;
+}
+
+if ($('usHmLegend')) $('usHmLegend').addEventListener('click', ev => {
+  const item = ev.target.closest('.lg[data-key]');
+  if (!item) return;
+  const k = item.getAttribute('data-key');
+  if (usHmHidden.has(k)) usHmHidden.delete(k); else usHmHidden.add(k);
+  renderUsageHourModels();
+});
+
+if ($('usHmChart')) $('usHmChart').addEventListener('click', ev => {
+  const g = ev.target.closest('g[data-t]');
+  if (!g) return;
+  const k = g.getAttribute('data-t');
+  usHmSel = usHmSel === k ? '' : k;
+  renderUsageHourModels();
+});
+
+if ($('usHmHeight')) $('usHmHeight').onchange = () => {
+  usHmHeight = Number($('usHmHeight').value) || 220;
+  renderUsageHourModels();
+};
+
+if ($('usHmMetric')) $('usHmMetric').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-m]');
+  if (!b) return;
+  usHmMetric = b.dataset.m;
+  $('usHmMetric').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  renderUsageHourModels();
+});
+
+const US_HM_ICON_EXPAND = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4"/></svg>';
+const US_HM_ICON_COMPRESS = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6h4V2M14 6h-4V2M2 10h4v4M14 10h-4v4"/></svg>';
+
+function usHmSetFull(on) {
+  const box = $('usHmBox');
+  if (!box) return;
+  box.classList.toggle('hm-full', on);
+  const b = $('usHmFull');
+  if (!b) return;
+  b.innerHTML = on ? US_HM_ICON_COMPRESS : US_HM_ICON_EXPAND;
+  b.title = on ? '还原（Esc）' : '放大（Esc 还原）';
+  if (b.setAttribute) b.setAttribute('aria-label', on ? '还原' : '放大');
+}
+if ($('usHmFull')) $('usHmFull').onclick = () => {
+  const box = $('usHmBox');
+  usHmSetFull(!(box && box.classList.contains('hm-full')));
+};
+document.addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape') return;
+  usHmSetFull(false);
+  if (usHmSel) { usHmSel = ''; renderUsageHourModels(); }
+});
 
 /* parsePointTime 把后端的 t 解析成毫秒时间戳。 */
 function parsePointTime(p) {
@@ -4268,7 +4591,8 @@ function renderUsageChart(series) {
     if (p.rate !== null) hasHit = true;
   }
 
-  const W = 1200, H = 200, PL = 58, PR = hasHit ? 34 : 14, PT = 18, PB = 30;
+  // 刻度字号放大一档（与按小时 × 模型图一致），左边距/下边距跟着加宽防压字。
+  const W = 1200, H = 200, PL = 64, PR = hasHit ? 34 : 14, PT = 18, PB = 32;
   const iw = W - PL - PR, ih = H - PT - PB;
 
   const t0 = pts[0].t;
@@ -4280,7 +4604,7 @@ function renderUsageChart(series) {
   const avg = pts.reduce((s, p) => s + p.tt, 0) / pts.length;
   $('usChartNote').textContent =
     pts.length + ' 个点 · 峰值 ' + fmtTok(peak.tt) + ' @ ' + fmtTokTimeLabel(peak) +
-    ' · 均值 ' + fmtTok(avg);
+    ' · 均值 ' + fmtTok(Math.round(avg));
 
   // 柱宽取「最小真实间隔」的 70%，并夹在合理区间内——窗口拉到 30 天时柱子会
   // 变细，但不会细到看不见。
@@ -4326,7 +4650,7 @@ function renderUsageChart(series) {
     out += '<line class="avg" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
            '" y2="' + y.toFixed(1) + '"/>';
     out += '<text class="tk-avg" x="' + (PL + 5) + '" y="' + (y - 4).toFixed(1) +
-           '" text-anchor="start">均值 ' + fmtTok(avg) + '</text>';
+      '" text-anchor="start">均值 ' + fmtTok(Math.round(avg)) + '</text>';
   }
 
   // 柱子
@@ -4481,7 +4805,12 @@ async function loadUsage() {
     $('usCreditTabs').innerHTML = usTabsHtml([['account', '按账号'], ['model', '按模型']], usCreditDim, null);
     $('usDimBody').innerHTML = '<tr><td colspan="10" class="empty">读取用量失败</td></tr>';
     $('usCreditBody').innerHTML = '<tr><td colspan="7" class="empty">读取用量失败</td></tr>';
-    $('usHourBody').innerHTML = '<tr><td colspan="8" class="empty">读取用量失败</td></tr>';
+    usHmData = null;
+    usHmSel = '';
+    if ($('usHmNote')) $('usHmNote').textContent = '—';
+    if ($('usHmLegend')) $('usHmLegend').innerHTML = '';
+    if ($('usHmDetail')) { $('usHmDetail').hidden = true; $('usHmDetail').innerHTML = ''; }
+    if ($('usHmChart')) $('usHmChart').innerHTML = '<div class="us-empty">读取用量失败</div>';
   }
 }
 
@@ -6505,9 +6834,19 @@ function renderSelfUpdate(d) {
     $('btnSuApply').disabled = false;
     return;
   }
-  state.className = d.reason ? 'tag mute' : 'tag ok';
-  state.textContent = d.reason ? '无法确认' : '已是最新';
-  $('suDesc').textContent = d.reason || '当前就是最新版本';
+  // 三态由后端 status 决定（老服务端没有该字段时按 reason 是否为空回落成两态）：
+  //   latest  → 已是最新（reason 里带版本对比说明）
+  //   unknown → 无法确认（网络失败 / 该平台无资产 / 其他没结论的情况）
+  // 早期版本用「reason 非空」判无法确认，把「已是最新（…）」的说明文字也误判成
+  // 了「无法确认」，所以截图上最新版也顶着灰色标签。
+  const status = (d && d.status) || (d.reason ? 'unknown' : 'latest');
+  if (status === 'latest') {
+    state.className = 'tag ok'; state.textContent = '已是最新';
+    $('suDesc').textContent = d.reason || '当前就是最新版本';
+    return;
+  }
+  state.className = 'tag mute'; state.textContent = '无法确认';
+  $('suDesc').textContent = d.reason || '检查结果未知，请稍后重试';
 }
 
 async function checkSelfUpdate(silent) {
@@ -6517,7 +6856,9 @@ async function checkSelfUpdate(silent) {
     $('suState').textContent = '检查中…';
   }
   try {
-    renderSelfUpdate(await api('selfupdate/check'));
+    // 静默检查走服务端 60 秒缓存（页面打开会触发两条查询，省 GitHub 配额）；
+    // 手点「检查更新」带 force=1 强制打上游，保证结果是最新的。
+    renderSelfUpdate(await api('selfupdate/check' + (silent ? '' : '?force=1')));
   } catch (e) {
     if (silent) return;
     $('suState').className = 'tag bad';

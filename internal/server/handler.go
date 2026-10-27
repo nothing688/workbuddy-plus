@@ -1145,6 +1145,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// groupMiss 指定了分组、但在该组内选不到号（末端据此改报 no_account_in_group，
 	// 与全池 no_healthy_account 区分）。只在 group 非空时置位。
 	groupMiss := false
+	// groupBroken 本次请求最终没选出号时，记录「该分组对当前模型已熔断」（组内
+	// 全部冷却/停牌），用于把末端文案与「组名写错/组内没号」区分开。
+	groupBroken := false
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
@@ -1367,6 +1370,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i := 0; i < maxAttempts; i++ {
+		// 本次尝试的分组熔断状态（每轮重置）：成功时据此回写响应头，末端据此细化错误。
+		attemptFailoverFrom, attemptBroken := "", false
 		// 本候选模型的换号额度用尽且还有候选 → 换模型（继续换号已无意义）。
 		if perModel >= h.cfg.MaxRotate && advance() {
 			continue
@@ -1376,18 +1381,34 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		var acct *auth.Auth
 		if stickyUID != "" {
 			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, curModel)
-			if acct == nil || (realm != "" && acct.Realm() != realm) || !h.accountInGroup(stickyUID, group) {
-				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）、realm 不符，
-				// 或不在本次请求指定的分组里 → 解绑，本次回落普通轮换（组内重选）。
+			switch {
+			case acct == nil || (realm != "" && acct.Realm() != realm):
+				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）、realm 不符
+				// → 解绑，本次回落普通轮换。
 				unbindSticky()
 				acct = nil
+			case !h.accountInGroup(stickyUID, group):
+				// 组外粘性号：分组对该模型已熔断时，它就是上一轮改道的落点，继续沿用
+				// （否则多轮会话每轮换号，前缀缓存与上下文连续性全丢）；未熔断则按
+				// 跨组残留解绑重选，维持既有的分组隔离语义。
+				if h.cfg.Pool.GroupBrokenFor(group, curModel, realm) {
+					attemptFailoverFrom, attemptBroken = group, true
+				} else {
+					unbindSticky()
+					acct = nil
+				}
 			}
 		}
 		if acct == nil {
 			// 模型感知 + realm 感知 + 分组感知选号：模型非空时启用 6004 模型级冷却豁免
 			// （healthyForModel），realm 谓词过滤跨域账号，group 谓词只在该运维分组里选。
+			// 组内对该模型已无可服务账号（全组冷却/停牌）时自动熔断该组，改道组外；
 			// group 为空时 Pool 侧直接委托旧实现（与 PickExcludingForRealm 逐字等价）。
-			acct = h.cfg.Pool.PickExcludingForRealmGroup(tried, curModel, realm, group)
+			var failoverFrom string
+			acct, failoverFrom = h.cfg.Pool.PickExcludingForRealmGroupWithFailover(tried, curModel, realm, group)
+			if failoverFrom != "" {
+				attemptFailoverFrom, attemptBroken = failoverFrom, true
+			}
 		}
 		if acct == nil {
 			// ⭐ 模型降级兜底（20261021 补的真实缺口）：全池该模型都处于 6004 冷却时，
@@ -1428,6 +1449,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 指定了分组并且走到了「本组选不到号」的末端：只有 group 非空才置位，
 			// 未指定分组时末端错误口径保持原样（no_healthy_account / model_busy）。
 			groupMiss = group != ""
+			groupBroken = attemptBroken
 			st.status = http.StatusServiceUnavailable
 			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
 			//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
@@ -1739,6 +1761,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		h.cfg.Pool.NoteSuccess(acct.UID)
 		// 成功才带头。uid 是十六进制，昵称可能非 ASCII，不入头。
 		w.Header().Set("X-Wb-Account", acct.UID)
+		// 分组熔断改道：告诉客户端本次请求实际由哪个分组承接（原分组已对该模型熔断）。
+		if attemptFailoverFrom != "" {
+			w.Header().Set("X-Wb-Group-Failover", attemptFailoverFrom)
+		}
 		// 11102 负缓存清命：该账号该模型实测成功，立即解除避让（不必等 TTL 到期）。
 		// BlockModelClear 按 "11102" reason 前缀识别，只清 11102 条目、不碰 6004 独立冷却。
 		h.cfg.Pool.BlockModelClear(acct.UID, curModel)
@@ -2158,8 +2184,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if groupMiss && !upstreamMsgPassed {
 		status = http.StatusServiceUnavailable
 		code = "no_account_in_group"
-		msg = fmt.Sprintf("分组 %s 无可用账号 (no account available in group %q)", group, group)
-		hint = fmt.Sprintf("no_account_in_group: group %q has no available account; check the group name or move accounts into it", group)
+		if groupBroken {
+			// 组内全冷却已熔断、但组外也没有可承接的号：说清楚是「熔断且无备选」，
+			// 而不是组名写错或组里没号——两者的处置完全不同（等解封 vs 改分组配置）。
+			msg = fmt.Sprintf("分组 %s 对该模型已熔断，且无其他分组可承接 (group %q circuit-broken for this model; no alternative group available)", group, group)
+			hint = fmt.Sprintf("group_breaker: group %q has no account usable for this model and no other group could take over; wait for cooldown to expire or move an account into another group", group)
+		} else {
+			msg = fmt.Sprintf("分组 %s 无可用账号 (no account available in group %q)", group, group)
+			hint = fmt.Sprintf("no_account_in_group: group %q has no available account; check the group name or move accounts into it", group)
+		}
 		quota = false
 		retryAfterSec = 0
 	}

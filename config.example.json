@@ -120,6 +120,7 @@
     "idle_weight_per_hour": 0.5,
     "idle_weight_max": 5.0,
     "prefer_expiring": true,
+    "group_breaker": true,
     "expiring_soon": "168h",
     "account_priority": {},
     "account_share": {},

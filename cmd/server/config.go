@@ -44,7 +44,8 @@ type Config struct {
 		// 面板共用 panel.UpstreamSyncConfig，避免两处 JSON 名漂移。
 		UpstreamSync panel.UpstreamSyncConfig `json:"upstream_sync"`
 		// SelfUpdate 面板「GitHub 热更新」：下载自己的 Release 二进制替换运行中的
-		// 进程。默认关闭——这是能换掉自身代码的能力，不该开箱即用。
+		// 进程。默认开启，但检查是只读的、替换二进制必须人工点「立即更新」；
+		// 公开仓库不需要 token（私有仓库或想提高 API 限额时才填只读 PAT）。
 		SelfUpdate panel.SelfUpdateConfig `json:"self_update"`
 
 		// PollIntervalSec 面板自动刷新间隔（秒）。0 = 用前端缺省（5s）；
@@ -311,6 +312,11 @@ type Config struct {
 		// 不按到期时间排序、与批次金额无关（issue #101 对齐实现口径）。
 		// 关闭后完全不使用到期信息选号。
 		PreferExpiring bool `json:"prefer_expiring"`
+		// GroupBreaker 分组熔断改道开关，默认 true：请求显式指定分组（头/query 或
+		// 面板 active group）时，若该组内账号对当前模型全部处于冷却/不可用状态，
+		// 自动熔断该组并把请求改道到其他可用分组的账号。关闭后只在组内选号，
+		// 回落到引入该机制前的 no_account_in_group 语义。
+		GroupBreaker bool `json:"group_breaker"`
 		// ExpiringSoon 快过期积分窗口（如 "168h"=7天）：签到/余额刷新时，到期时间在
 		// 此窗口内的批次令账号命中上述 ×3 加权；窗口开大 → 命中账号变多、
 		// 偏好被稀释。空/0 = 禁用该加权门槛。
@@ -540,6 +546,7 @@ func Default() *Config {
 	c.Pool.IdleWeightPerHour = 0.5
 	c.Pool.IdleWeightMax = 5.0
 	c.Pool.PreferExpiring = true
+	c.Pool.GroupBreaker = true   // 分组熔断改道默认开；关闭即退回纯组内选号
 	c.Pool.ExpiringSoon = "168h" // 快过期窗口默认 7 天：官方活动奖励积分多在两周内过期
 	// costTier 探索默认 30m（issue #136：垄断破除 + 搭车改道零新增请求）；"0" 关停。
 	c.Pool.CostExploreInterval = "30m"
@@ -832,6 +839,11 @@ func applyEnv(c *Config) {
 			c.Pool.PreferExpiring = b
 		}
 	}
+	if v := os.Getenv("WB2A_GROUP_BREAKER"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Pool.GroupBreaker = b
+		}
+	}
 }
 
 // EnvironmentManagedFields 列出被启动环境变量覆盖的配置字段路径（**值不回传**——
@@ -854,6 +866,7 @@ func (c *Config) EnvironmentManagedFields() []string {
 		{"WB2A_SANITIZE_BRAND_SCOPE", "features.sanitize_brand_scope", ""},
 		{"WB2A_PROMPT_MODE", "prompt.mode", ""}, {"WB2A_PROMPT_FILE", "prompt.file", ""},
 		{"WB2A_EXPIRING_SOON", "pool.expiring_soon", ""}, {"WB2A_PREFER_EXPIRING", "pool.prefer_expiring", "bool"},
+		{"WB2A_GROUP_BREAKER", "pool.group_breaker", "bool"},
 		{"WB2A_SCHEDULE_JITTER_MINUTES", "schedule.jitter_minutes", "int"},
 		{"WB2A_SCHEDULE_ACCOUNT_SPREAD_MINUTES", "schedule.account_spread_minutes", "int"},
 		{"WB2A_SCHEDULE_ACCOUNT_SPREAD_MIN_GAP_SECONDS", "schedule.account_spread_min_gap_seconds", "int"},

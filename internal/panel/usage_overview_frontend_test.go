@@ -34,8 +34,8 @@ vm.runInContext(
   'function trangeLabel(){ return "近7天"; }' +
   'function remarkName(u, h){ return h; }' +
   'function renderUsageChart(){ }' +
-  // renderUsage 末尾还会填按小时表，那个函数在切片之外（切片止于 renderUsageChart 注释）。
-  'function renderUsageHours(){ }' +
+  // renderUsage 末尾还会触发按小时 × 模型的图（独立接口），该函数在切片之外。
+  'function loadUsageHourModels(){ }' +
   'function fmtHit(){ return "—"; }' +
   'function cacheRateCell(){ return "—"; }' +
   src.slice(escStart, escEnd) + src.slice(cacheStart, cacheEnd) + src.slice(kpiStart, kpiEnd) +

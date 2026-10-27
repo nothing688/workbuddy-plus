@@ -445,7 +445,7 @@ curl -s http://localhost:7863/v1/messages \
 | `panel.package_detail_limit` | `5` | 积分构成页单账号默认展示的最早到期包数；其余未用完包与已用完包聚合折叠 |
 | `panel.self_update.enabled` | `true` | 面板「维护 → GitHub 热更新」开关。默认开启；**面板未设 `api_key` 时拒绝执行**（无鉴权面板不能让任何人替换二进制） |
 | `panel.self_update.repo` | `nothing688/workbuddy-plus` | 查 Release 的仓库（`owner/name`），只认该仓库 `v*` 标签的正式 Release |
-| `panel.self_update.token` | 空 | 仅在仓库转回私有或需要提高 API 限额时填只读 PAT；仓库公开时留空即可 |
+| `panel.self_update.token` | 空 | 仅在仓库转回私有或需要提高 API 限额时填只读 PAT；仓库公开时留空即可。匿名 API 被限流（60 次/小时/IP）时会自动退回网页 302 查询并下载，不消耗 API 配额，代价是没有官方 sha256 校验和 |
 | `update.auto_enabled` | `false` | 是否每天按上海时间自动检查并安装新的时间标签版 Release；仅原生 Linux / Windows `amd64` / `arm64` 二进制支持原地更新 |
 | `update.auto_time` | `04:00` | 自动更新时间，格式 `HH:MM`，按上海时间执行；容器 / systemd 等托管部署会检测版本但需手动更新镜像或下载 Release |
 | `logging.request_archive_enabled` | `true` | 请求元数据 JSONL 归档开关；不记录提示词、响应正文或 Authorization |
@@ -850,7 +850,7 @@ http://127.0.0.1:7863/panel/
 
 面板左上角会显示当前版本；启动后会定期查询 GitHub Release，发现更新时显示提醒。设置页可手动检查、打开 Release 或一键更新。更新前会校验 GitHub SHA-256 摘要并在替换失败时恢复旧程序；Docker、systemd / Windows 服务等托管环境只提示手动更新，避免覆盖由宿主机或镜像管理的程序文件。
 
-顶部「刷新」按钮 = 向上游全量查询真实余额并回写（5 秒自动轮询只读内存，不打上游）。
+顶部「刷新」按钮 = 重新加载面板页面（整页 reload，筛选/排序/日志游标等内存态一并重置）。它**不会**向上游重查余额：余额由后台按 `schedule.balance_refresh_minutes` 定时刷新，单号可点账号行的「余额」按钮即时对账；5 秒自动轮询只读内存，不打上游。
 
 面板后端接口挂在 `/panel/api/*`（同一 Bearer 鉴权），可脚本化调用；账号运维操作均落到池既有入口（`Revive`/`Disable`/`Remove` 等），与 `/status` 观测口径一致。
 

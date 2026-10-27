@@ -679,6 +679,34 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-hd .sw-hit { background: var(--warn); }
   /* 均值是虚线参考线：色块用同色虚纹，和实线的「缓存命中率」一眼可分。 */
   .uschart-hd .sw-t { background: repeating-linear-gradient(90deg, var(--warn) 0 4px, transparent 4px 6px); }
+  /* 按小时 × 模型：图例可点选显隐；卡片可放大到整屏看细节。 */
+  #usHmLegend { flex-wrap: wrap; row-gap: 4px; }
+  #usHmLegend .lg { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+  #usHmLegend .lg.off { opacity: .38; text-decoration: line-through; }
+  #usHmLegend .lg:hover { color: var(--ink); }
+  /* 图表右上角的放大/还原：图标按钮，不占标题行文字。 */
+  .hm-full-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; border: 1px solid transparent; border-radius: 6px; background: transparent;
+    color: var(--ink-3); cursor: pointer; }
+  .hm-full-btn:hover { color: var(--ink); background: var(--surface); border-color: var(--line-soft); }
+  .hm-detail { border-top: 1px solid var(--line-soft); padding: 10px 14px; font-size: 12.5px; color: var(--ink-2); }
+  /* 一行一个模型：名称固定宽对齐，数值列等宽数字，列与列之间留呼吸感。 */
+  .hm-detail .hd { display: flex; gap: 10px; align-items: baseline; margin-bottom: 4px; }
+  .hm-detail .hd b { color: var(--ink); }
+  .hm-detail .grid { margin-top: 2px; }
+  .hm-detail .it { display: flex; align-items: center; gap: 8px; line-height: 1.9; }
+  .hm-detail .it .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 2px; }
+  .hm-detail .it .nm { flex: 0 0 17em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hm-detail .it b { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 5.5em; }
+  .hm-detail .it .meta { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .hm-detail .it.off { opacity: .5; }
+  .hm-detail .it.off .nm { text-decoration: line-through; }
+  .hm-detail .note { margin-top: 4px; }
+  #usHmBox.hm-full { position: fixed; inset: 10px; z-index: 80; margin: 0; background: var(--surface);
+    display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+  #usHmBox.hm-full .pad { flex: 1; display: flex; min-height: 0; }
+  #usHmBox.hm-full .uschart { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #usHmBox.hm-full .uschart-body { flex: 1; overflow: auto; }
   /* 缓存命中率曲线（右轴 0-100%）：折线 + 每个数据点一个圆点。 */
   .uschart-body .hitline { fill: none; stroke: var(--warn); stroke-width: 1.6; }
   .uschart-body .hitdot { fill: var(--warn); }
@@ -690,6 +718,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-body .tk { fill: var(--ink-3); font: 10px var(--mono); }
   .uschart-body .tk-avg { fill: var(--warn); font: 10px var(--mono); opacity: .9; }
   .uschart-body .tk-peak { fill: var(--ink-2); font: 600 10px var(--mono); }
+  /* 按小时 × 模型的刻度/标注放大一档：这张图模型多、柱子密，10px 太难认。 */
+  #usHmChart .tk { font-size: 11.5px; }
+  #usHmChart .tk-avg { font-size: 11.5px; }
+  #usHmChart .tk-peak { font-size: 11.5px; }
+  /* Token 时序同步放大（这张图更长，柱子上的数值更密）。 */
+  #usChart .tk { font-size: 11.5px; }
+  #usChart .tk-avg { font-size: 11.5px; }
+  #usChart .tk-peak { font-size: 11.5px; }
   .uschart-body rect.usbar { transition: opacity .12s; }
   .uschart-body rect.usbar:hover { opacity: .78; }
   .uschart-body .us-empty { padding: 30px 0; text-align: center; color: var(--ink-3); font-size: 12.5px; }
@@ -704,7 +740,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* 表内 zebra：三张表行数多，靠极淡的交替底色帮眼睛横向对齐。 */
   .acc.zebra tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
   .acc.zebra tbody tr:hover { background: var(--surface-2); }
-
   /* ── 积分构成 ───────────────────────────────────────────────── */
   .pk-grid { display: flex; flex-wrap: wrap; gap: 10px; }
   .pk-card { flex: 1 1 220px; min-width: 200px; border: 1px solid var(--line-soft);
@@ -1542,7 +1577,7 @@ input::placeholder { color: var(--ink-3); }
       <button class="icon ghost" id="btnFont" title="字体：内嵌文泉驿（点击切换）" aria-label="切换字体">
         <span style="font:600 12px/1 var(--sans); letter-spacing:.02em">Aa</span>
       </button>
-      <button class="icon ghost" id="btnRefresh" title="刷新" aria-label="刷新">
+      <button class="icon ghost" id="btnRefresh" title="刷新页面（整页重载）" aria-label="刷新页面">
         <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3"/></svg>
       </button>
       <button class="icon primary" id="btnAdd" title="添加账号（浏览器登录 / 导入 JSON）" aria-label="添加账号">
@@ -1897,18 +1932,37 @@ input::placeholder { color: var(--ink-3); }
         </div>
       </div>
 
-      <div class="box">
-        <header><h3>积分与 token 按小时</h3><span class="grow"></span>
-          <span class="note">积分取上游 usage.credit（没观测到的请求不计）；兑换率 = token ÷ 积分</span></header>
-        <div class="tbl-wrap">
-          <table class="acc">
-            <thead><tr>
-              <th class="mark" aria-hidden="true"></th><th>时段</th>
-              <th class="num">请求</th><th class="num">Prompt</th><th class="num">Completion</th>
-              <th class="num">合计</th><th class="num">积分</th><th class="num">token/积分</th>
-            </tr></thead>
-            <tbody id="usHourBody"><tr><td colspan="8"><div class="empty" style="padding:22px 12px">暂无按小时数据 —— 有请求产生后按整点聚合显示</div></td></tr></tbody>
-          </table>
+      <div class="box" id="usHmBox">
+        <header>
+          <h3>按小时 · 按模型调用量</h3>
+          <span class="grow"></span>
+          <span class="note" id="usHmNote">—</span>
+          <label class="sel-note">高度
+            <select id="usHmHeight">
+              <option value="160">紧凑</option>
+              <option value="220" selected>标准</option>
+              <option value="320">加高</option>
+            </select>
+          </label>
+          <span class="vtabs" id="usHmMetric">
+            <button data-m="requests" class="on">请求</button>
+            <button data-m="tokens">Token</button>
+            <button data-m="credits">积分</button>
+          </span>
+        </header>
+        <div class="pad">
+          <div class="uschart">
+            <div class="uschart-hd">
+              <span class="legend" id="usHmLegend"></span>
+              <span class="grow"></span>
+              <button class="hm-full-btn" id="usHmFull" title="放大（Esc 还原）" aria-label="放大">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+                  stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4"/></svg>
+              </button>
+            </div>
+            <div id="usHmChart" class="uschart-body"></div>
+            <div id="usHmDetail" class="hm-detail" hidden></div>
+          </div>
         </div>
       </div>
 
@@ -2163,6 +2217,9 @@ input::placeholder { color: var(--ink-3); }
             </div>
             <div class="switch"><span class="lb">快过期积分优先</span>
               <input type="checkbox" name="prefer_expiring"></div>
+            <div class="switch"><span class="lb">分组熔断改道</span>
+              <input type="checkbox" name="group_breaker"></div>
+            <div class="hint">指定分组内账号对当前模型全部冷却 / 不可用时，自动熔断该分组并把请求改道到其他可用分组；关闭后只在组内选号（全组不可用即报 no_account_in_group）。默认开启，保存即生效。</div>
           </div>
         </div>
 

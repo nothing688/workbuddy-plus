@@ -216,6 +216,26 @@ func TestNewPoolConfigDefaults(t *testing.T) {
 	}
 }
 
+// TestGroupBreakerConfigDefaultAndOverride 分组熔断开关默认开；显式 false 能关掉
+// （归一化不得把 false 洗回默认 true）。
+func TestGroupBreakerConfigDefaultAndOverride(t *testing.T) {
+	c, err := ParseConfig([]byte(`{}`))
+	if err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	if !c.Pool.GroupBreaker {
+		t.Error("group_breaker 默认应为 true")
+	}
+
+	off, err := ParseConfig([]byte(`{"pool":{"group_breaker":false}}`))
+	if err != nil {
+		t.Fatalf("parse override: %v", err)
+	}
+	if off.Pool.GroupBreaker {
+		t.Error("group_breaker=false 应保留关闭状态")
+	}
+}
+
 func TestPoolConfigParsedFromFile(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")

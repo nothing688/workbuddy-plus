@@ -24,6 +24,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,9 +78,38 @@ type releaseInfo struct {
 	Assets      []releaseAsset `json:"assets"`
 }
 
-// selfUpdateCheck GET /panel/api/selfupdate/check
+// selfUpdateCacheTTL 检查结果缓存时长。
+//
+// GitHub 匿名 API 只有 60 次/小时/IP，而维护页每打开一次就会打两条查询
+// （autoCheckUpdate 的全局提醒 + loadMaint 的卡片），多开几个标签页或在共享
+// 出口 IP（CNB / NAT）上很容易被同 IP 的其它任务一起打满——实测 403 限流时
+// 页面就只剩「无法确认」。短缓存把同一分钟的重复查询压成一次；用户显式点
+// 「检查更新」带 force=1 绕过，保证手动检查总是最新的。
+const selfUpdateCacheTTL = 60 * time.Second
+
+// selfUpdateCheck GET /panel/api/selfupdate/check[?force=1]
 // 只读：查最新 Release、挑当前平台的资产、和运行中版本比大小。不下载。
 func (p *Panel) selfUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	force := r.URL.Query().Get("force") == "1"
+	if !force {
+		p.selfUpdateMu.Lock()
+		if p.selfUpdateCache != nil && time.Since(p.selfUpdateCacheAt) < selfUpdateCacheTTL {
+			cached := p.selfUpdateCache
+			p.selfUpdateMu.Unlock()
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+		p.selfUpdateMu.Unlock()
+	}
+	resp := p.selfUpdateCheckPayload()
+	p.selfUpdateMu.Lock()
+	p.selfUpdateCache, p.selfUpdateCacheAt = resp, time.Now()
+	p.selfUpdateMu.Unlock()
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// selfUpdateCheckPayload 真正打 GitHub 的那部分（缓存只缓存它的结果）。
+func (p *Panel) selfUpdateCheckPayload() map[string]any {
 	cfg := p.selfUpdateCfg()
 	cur := p.cfg.Version
 	resp := map[string]any{
@@ -87,17 +117,22 @@ func (p *Panel) selfUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		"repo":             cfg.Repo,
 		"current":          cur,
 		"update_available": false,
+		// status 是给前端定状态的机器可读字段，避免再用「reason 非空」猜语义：
+		//   update_available → 有新版本；latest → 已确认是最新；
+		//   disabled → 未启用；unknown → 没能得出结论（网络/资产缺失等）。
+		// 早期版本把「已是最新（运行中 X，最新 Y）」写进 reason，前端据此误判成
+		// 「无法确认」——reason 现在只承载给用户看的说明文字。
+		"status": "unknown",
 	}
 	if !cfg.Enabled {
+		resp["status"] = "disabled"
 		resp["reason"] = "未启用：在 config.json 设 panel.self_update.enabled=true 并重启"
-		writeJSON(w, http.StatusOK, resp)
-		return
+		return resp
 	}
 	rel, err := p.fetchLatestRelease(cfg)
 	if err != nil {
 		resp["reason"] = err.Error()
-		writeJSON(w, http.StatusOK, resp)
-		return
+		return resp
 	}
 	asset, why := pickReleaseAsset(rel, runtime.GOOS, runtime.GOARCH)
 	latest := strings.TrimPrefix(rel.TagName, "v")
@@ -106,8 +141,7 @@ func (p *Panel) selfUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	resp["published_at"] = rel.PublishedAt
 	if asset == nil {
 		resp["reason"] = why
-		writeJSON(w, http.StatusOK, resp)
-		return
+		return resp
 	}
 	resp["asset"] = map[string]any{
 		"name": asset.Name, "size": asset.Size,
@@ -115,12 +149,14 @@ func (p *Panel) selfUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	// 版本号比较用日期式逐段比，不能用字符串（不补零，字典序会反）。
 	if selfupdate.CompareVersion(latest, cur) > 0 {
+		resp["status"] = "update_available"
 		resp["update_available"] = true
 		resp["notes"] = truncateStr(rel.Body, selfUpdateNotesMax)
 	} else {
+		resp["status"] = "latest"
 		resp["reason"] = "已是最新（运行中 " + cur + "，最新 " + latest + "）"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // selfUpdateApply POST /panel/api/selfupdate/apply
@@ -229,7 +265,106 @@ func (p *Panel) selfUpdateCfg() SelfUpdateConfig {
 }
 
 // fetchLatestRelease 查 GitHub 最新正式 Release（不是预发布）。
+//
+// 优先走 API（有资产清单、发布时间和官方 sha256）。API 失败且没配 token 时，
+// 退回公开网页的 302 跳转：`https://github.com/<repo>/releases/latest` 会跳到
+// `.../releases/tag/vX`，这一步**不消耗 API 配额**；资产按 CI 的命名约定
+// （wb2api-panel-<version>-<os>-<arch>.zip）拼出来，并 HEAD 校验它确实存在。
+//
+// 为什么值得留这条兜底：匿名 API 只有 60 次/小时/IP，CNB、公司 NAT 这类共享
+// 出口 IP 上会被同 IP 的其它任务一起打满（实测 403）。有这条兜底，公开仓库的
+// 用户不建 PAT 也能热更新；配了 token 的私有仓库仍然只走 API（那条路径才有
+// 鉴权和资产清单）。
 func (p *Panel) fetchLatestRelease(cfg SelfUpdateConfig) (*releaseInfo, error) {
+	rel, apiErr := p.fetchReleaseViaAPI(cfg)
+	if apiErr == nil {
+		return rel, nil
+	}
+	if cfg.Token == "" {
+		if rel, err := p.fetchReleaseViaWeb(cfg); err == nil {
+			return rel, nil
+		}
+	}
+	return nil, apiErr
+}
+
+// webBaseFor 由 API base 推出网页 base：公共 GitHub 用 github.com；自建
+// GitHub Enterprise 的 API 是 `<host>/api/v3`，网页仍是 `<host>`。
+func webBaseFor(apiBase string) string {
+	b := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	if b == "" || b == "https://api.github.com" {
+		return "https://github.com"
+	}
+	return strings.TrimSuffix(b, "/api/v3")
+}
+
+// releaseTagFromLocation 从 `.../releases/tag/v2026.10.26.2205` 里取出 tag。
+func releaseTagFromLocation(loc string) string {
+	const marker = "/releases/tag/"
+	i := strings.LastIndex(loc, marker)
+	if i < 0 {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(loc[i+len(marker):]), "/")
+}
+
+// fetchReleaseViaWeb 用网页 302 解析最新 tag，并按发布命名约定拼资产地址。
+// 只适用于公开仓库；私有仓库的网页端点会跳登录页，这里会失败并回落到 API 的
+// 原错误（提示配 token）。
+func (p *Panel) fetchReleaseViaWeb(cfg SelfUpdateConfig) (*releaseInfo, error) {
+	web := webBaseFor(cfg.APIBase) + "/" + cfg.Repo
+	req, err := http.NewRequest(http.MethodGet, web+"/releases/latest", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/html")
+	// 不跟随跳转：Location 里就是最新 tag，跟随过去反而要拉整个 HTML 页。
+	client := *p.selfUpdateHTTP(20 * time.Second)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusMovedPermanently &&
+		resp.StatusCode != http.StatusSeeOther && resp.StatusCode != http.StatusTemporaryRedirect &&
+		resp.StatusCode != http.StatusPermanentRedirect {
+		return nil, fmt.Errorf("网页 releases/latest 返回 HTTP %d", resp.StatusCode)
+	}
+	tag := releaseTagFromLocation(resp.Header.Get("Location"))
+	if tag == "" {
+		return nil, fmt.Errorf("网页 releases/latest 未给出 tag：%q", resp.Header.Get("Location"))
+	}
+	version := strings.TrimPrefix(tag, "v")
+	name := fmt.Sprintf("wb2api-panel-%s-%s-%s.zip", version, runtime.GOOS, runtime.GOARCH)
+	dl := web + "/releases/download/" + url.PathEscape(tag) + "/" + name
+
+	// HEAD 确认资产存在（网页下载不占 API 配额）：命名约定变了就老实失败，
+	// 由调用方回落到 API 的原始错误，而不是报一个「有更新」却下载 404。
+	headReq, err := http.NewRequest(http.MethodHead, dl, nil)
+	if err != nil {
+		return nil, err
+	}
+	head, err := p.selfUpdateHTTP(20 * time.Second).Do(headReq)
+	if err != nil {
+		return nil, err
+	}
+	defer head.Body.Close()
+	if head.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("资产 %s 不存在（HTTP %d）", name, head.StatusCode)
+	}
+	return &releaseInfo{
+		TagName: tag,
+		Assets: []releaseAsset{{
+			Name: name,
+			Size: head.ContentLength,
+			URL:  dl,
+		}},
+	}, nil
+}
+
+// fetchReleaseViaAPI 走 GitHub REST API（唯一能拿资产清单 / 官方 sha256 的路径）。
+func (p *Panel) fetchReleaseViaAPI(cfg SelfUpdateConfig) (*releaseInfo, error) {
 	u := cfg.APIBase + "/repos/" + cfg.Repo + "/releases/latest"
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
@@ -253,8 +388,35 @@ func (p *Panel) fetchLatestRelease(cfg SelfUpdateConfig) (*releaseInfo, error) {
 		}
 		return nil, fmt.Errorf("仓库 %s 没有 Release（先打 v* 标签发布）", cfg.Repo)
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API %d：token 无效或权限不足（需要 repo 读权限）", resp.StatusCode)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("GitHub API 401：token 无效或已过期（检查 panel.self_update.token）")
+	}
+	// 403/429 有两种完全不同的原因，不能混成一句「token 无效」：
+	//   - 配额用尽：匿名 API 60 次/小时/IP。CNB、公司 NAT 这类共享出口 IP 上，
+	//     同 IP 的其它任务会把额度吃光，本服务自己再怎么省也不够——这是实测里
+	//     最常见的一种，报「token 无效」会把人引到完全错误的方向。
+	//   - token 权限不足（私有仓库未授权）。
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			quota := "匿名配额（60 次/小时/IP）"
+			if cfg.Token != "" {
+				quota = "token 配额"
+			}
+			resetHint := ""
+			if sec, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+				if d := time.Until(time.Unix(sec, 0)); d > 0 {
+					if d >= time.Minute {
+						resetHint = fmt.Sprintf("，约 %d 分钟后重置", int(d.Minutes()+0.5))
+					} else {
+						resetHint = fmt.Sprintf("，约 %d 秒后重置", int(d.Seconds()+0.5))
+					}
+				} else {
+					resetHint = "，即将重置"
+				}
+			}
+			return nil, fmt.Errorf("GitHub API 限流：%s已用尽%s；稍后重试，或在 panel.self_update.token 配只读 token（5000 次/小时）", quota, resetHint)
+		}
+		return nil, fmt.Errorf("GitHub API 403：访问被拒绝（token 权限不足或仓库访问受限）")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API %d", resp.StatusCode)

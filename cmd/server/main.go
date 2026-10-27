@@ -178,6 +178,7 @@ func main() {
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
 	p.SetReserveCredits(*cfg.Pool.ReserveCredits) // 保留积分：余额低于阈值停止接单（0 = 关闭，缺省 10）
 	p.SetPreferExpiring(cfg.Pool.PreferExpiring, cfg.ExpiringSoonDur)
+	p.SetGroupBreaker(cfg.Pool.GroupBreaker)       // 分组熔断改道（默认开，面板可热切换）
 	p.SetAccountPriority(cfg.Pool.AccountPriority) // 账号优先级/占比（issue #62）：空表 = 不启用
 	p.SetAccountShare(cfg.Pool.AccountShare)
 
@@ -861,6 +862,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	p.SetCreditFloorMaxRate(newCfg.Pool.CreditFloorMaxRate) // 保底倍率上限热生效（0 = 严格模式）
 	p.SetWeights(newCfg.Pool.IdleWeightPerHour, newCfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(newCfg.Pool.PreferExpiring, newCfg.ExpiringSoonDur)
+	p.SetGroupBreaker(newCfg.Pool.GroupBreaker) // 分组熔断开关热生效
 	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)
 	sch.SetKeepaliveRefreshWindow(newCfg.KeepaliveRefreshWindowDur)
 	p.SetReserveCredits(*newCfg.Pool.ReserveCredits)  // 保留积分热生效（0 = 关闭，缺省 10）

@@ -146,6 +146,13 @@ type Panel struct {
 	modelsCacheAt time.Time
 	modelsCache   *modelsCacheEntry
 
+	// selfUpdateMu/selfUpdateCache* /panel/api/selfupdate/check 的 60 秒结果缓存：
+	// GitHub 匿名 API 只有 60 次/小时/IP，维护页每次打开会打两条查询，共享出口 IP
+	// 下很容易被限流成 403。显式检查（?force=1）绕过缓存。
+	selfUpdateMu      sync.Mutex
+	selfUpdateCacheAt time.Time
+	selfUpdateCache   map[string]any
+
 	// 任务中心执行队列（taskcenter.go）。
 	queueOnce sync.Once
 	q         *queueState
@@ -328,6 +335,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/balance_history", p.withAuth(p.balanceHistory))
 	p.mux.HandleFunc("GET /panel/api/school/vouchers", p.withAuth(p.schoolVouchers))
 	p.mux.HandleFunc("GET /panel/api/usage", p.withAuth(p.usage))
+	p.mux.HandleFunc("GET /panel/api/usage/hourly-models", p.withAuth(p.usageHourlyModels))
 	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
@@ -431,6 +439,9 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		// model_locks 模型级限流清单（哪些模型不能用、锁了几个号、还要锁多久）。
 		// ?group= 存在时只统计该分组（group= 空串 = 未分组）；不存在 = 全池。
 		"model_locks": p.modelLockRows(r),
+		// group_breakers 分组级熔断清单：分组对该模型已无可服务账号、请求正在被
+		// 改道到组外。与 model_locks 互补（前者看组，后者看模型）。
+		"group_breakers": p.cfg.Pool.GroupBreakers(),
 		// 到期提醒快照的节奏与年龄：界面轮询是 5 秒级，但卡片数据只随余额后台刷新
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
 		"balance_refresh_sec":  p.balanceRefreshSec(),
@@ -1535,6 +1546,19 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "usage recorder not available")
 		return
 	}
+	win := usageWindow(r)
+	// 昵称仅用于展示，取自池快照（不含任何凭证）。
+	nicks := p.nicknames()
+	var currentRate func(realm, model string) string
+	if p.cfg.Upstream != nil {
+		currentRate = p.cfg.Upstream.ModelRate
+	}
+	writeJSON(w, http.StatusOK, p.cfg.Usage.SnapshotWindow(win, nicks, currentRate))
+}
+
+// usageWindow 解析用量接口的统计窗口（/usage 与 /usage/hourly-models 共用）：
+// from/to 显式区间优先，否则 hours 滚动窗口（默认 72，上限 1440），都不给 = 72。
+func usageWindow(r *http.Request) usage.Window {
 	q := r.URL.Query()
 	win := usage.Window{}
 	win.From = parseTimeParam(q.Get("from"))
@@ -1550,13 +1574,24 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 			win.Hours = 1440
 		}
 	}
-	// 昵称仅用于展示，取自池快照（不含任何凭证）。
-	nicks := p.nicknames()
-	var currentRate func(realm, model string) string
-	if p.cfg.Upstream != nil {
-		currentRate = p.cfg.Upstream.ModelRate
+	return win
+}
+
+// usageHourlyModels 按小时 × 模型的分段数据（堆叠柱状图）。top 控制模型数
+// （默认 8，最大 20），其余聚合为「其他」；窗口超过 14 天只保留最近 14 天。
+// 独立接口是为了不把这份明细塞进 /usage 的整包响应（那边还会被 5 秒轮询读）。
+func (p *Panel) usageHourlyModels(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.Usage == nil {
+		writeErr(w, http.StatusNotImplemented, "usage recorder not available")
+		return
 	}
-	writeJSON(w, http.StatusOK, p.cfg.Usage.SnapshotWindow(win, nicks, currentRate))
+	top := 8
+	if v := r.URL.Query().Get("top"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			top = n
+		}
+	}
+	writeJSON(w, http.StatusOK, p.cfg.Usage.HourlyModels(usageWindow(r), top))
 }
 
 // parseTimeParam 解析时间查询参数：unix 秒（前端默认）或 RFC3339（便于手工调

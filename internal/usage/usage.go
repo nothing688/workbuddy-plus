@@ -470,6 +470,185 @@ type Point struct {
 	Agg
 }
 
+// ---------------------------------------------------------------------------
+// 按小时 × 模型的堆叠柱状图数据
+//
+// 与 Snapshot 的 ByModel 分工：ByModel 是整段窗口的汇总（一行一个模型），
+// 这里保留小时维度——每小时一根柱子，按模型分段。数据仍来自同一份小时桶
+// （scope 带 model），没有新增持久化。
+// ---------------------------------------------------------------------------
+
+// HourModelCell 一根柱子里的一个模型分段。
+type HourModelCell struct {
+	Requests    int64   `json:"requests"`
+	Errors      int64   `json:"errors"`
+	TotalTokens int64   `json:"total_tokens"`
+	Credits     float64 `json:"credits"`
+}
+
+func (c *HourModelCell) addBucket(b *bucket) {
+	c.Requests += b.Req
+	c.Errors += b.Err
+	c.TotalTokens += b.TT
+	c.Credits += b.CR
+}
+
+func (c *HourModelCell) merge(o *HourModelCell) {
+	c.Requests += o.Requests
+	c.Errors += o.Errors
+	c.TotalTokens += o.TotalTokens
+	c.Credits += o.Credits
+}
+
+// ModelRef 一个模型列（也是窗口内该模型的汇总，供排序与图例）。
+type ModelRef struct {
+	Key      string `json:"key"` // realm + ":" + model
+	Realm    string `json:"realm"`
+	Model    string `json:"model"`
+	Requests int64  `json:"requests"`
+}
+
+// HourModelRow 一个小时的所有模型用量；Other 收纳前 N 名之外的模型。
+type HourModelRow struct {
+	T     string                   `json:"t"` // "2006-01-02T15"
+	Cells map[string]HourModelCell `json:"cells"`
+	Other HourModelCell            `json:"other"`
+	// OtherCells 被折叠进「其他」的每个模型的小时明细（key 同 ModelRef.Key）。
+	// 只给明细展开用，不参与绘图；模型数不多（TopN 之外通常个位数）。
+	OtherCells map[string]HourModelCell `json:"other_cells,omitempty"`
+	Total      HourModelCell            `json:"total"`
+}
+
+// HourModelTable 图表整包。
+type HourModelTable struct {
+	Models      []ModelRef     `json:"models"`
+	Hours       []HourModelRow `json:"hours"`
+	OtherModels int            `json:"other_models"`
+	// OtherRefs 被折叠进「其他」的模型清单（按请求数降序），供前端展开明细。
+	OtherRefs []ModelRef `json:"other_refs,omitempty"`
+	// Truncated 所选窗口超过 14 天，只保留了最近 14 天的小时明细。
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// hourlyModelMaxHours 小时 × 模型明细上限（14 天）：再长行数会爆表，浏览器里
+// 也翻不动；超出时截断并由前端标注。
+const hourlyModelMaxHours = 24 * 14
+
+// HourlyModels 按小时 × 模型聚合窗口内的用量。topN 为模型数上限（其余归入 Other）。
+// 只统计小时桶；90 天前折叠出的日桶没有小时维度，不参与（与本图的时间粒度一致）。
+func (r *Recorder) HourlyModels(w Window, topN int) HourModelTable {
+	if r == nil {
+		return HourModelTable{}
+	}
+	if topN <= 0 {
+		topN = 8
+	}
+	if topN > 20 {
+		topN = 20
+	}
+	from, to := w.bounds()
+	truncated := false
+	capFrom := time.Now().Truncate(time.Hour).Add(-(hourlyModelMaxHours - 1) * time.Hour)
+	if from.IsZero() || from.Before(capFrom) {
+		from = capFrom
+		truncated = true
+	}
+	if !to.IsZero() && to.Before(from) {
+		return HourModelTable{Truncated: truncated}
+	}
+
+	r.mu.Lock()
+	bs := make([]bucket, 0, len(r.buckets))
+	for _, b := range r.buckets {
+		bs = append(bs, *b)
+	}
+	r.mu.Unlock()
+
+	byHour := map[string]map[string]*HourModelCell{}
+	modelTotals := map[string]*ModelRef{}
+	for i := range bs {
+		b := &bs[i]
+		if !strings.HasPrefix(b.Scope, "h:") {
+			continue // 日桶没有小时维度
+		}
+		ts, err := time.ParseInLocation(hourLayout, strings.TrimPrefix(b.Scope, "h:"), time.Local)
+		if err != nil {
+			continue
+		}
+		if ts.Before(from) || (!to.IsZero() && ts.After(to)) {
+			continue
+		}
+		key := b.Realm + ":" + b.Model
+		row := byHour[b.Scope]
+		if row == nil {
+			row = map[string]*HourModelCell{}
+			byHour[b.Scope] = row
+		}
+		cell := row[key]
+		if cell == nil {
+			cell = &HourModelCell{}
+			row[key] = cell
+		}
+		cell.addBucket(b)
+		ref := modelTotals[key]
+		if ref == nil {
+			ref = &ModelRef{Key: key, Realm: b.Realm, Model: b.Model}
+			modelTotals[key] = ref
+		}
+		ref.Requests += b.Req
+	}
+
+	// 模型顺序按窗口内请求数降序（同数按 key 稳定），前 N 名成列，其余归入「其他」。
+	refs := make([]ModelRef, 0, len(modelTotals))
+	for _, ref := range modelTotals {
+		refs = append(refs, *ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Requests != refs[j].Requests {
+			return refs[i].Requests > refs[j].Requests
+		}
+		return refs[i].Key < refs[j].Key
+	})
+	top := refs
+	other := 0
+	if len(refs) > topN {
+		top = refs[:topN]
+		other = len(refs) - topN
+	}
+	topSet := make(map[string]bool, len(top))
+	for _, m := range top {
+		topSet[m.Key] = true
+	}
+
+	scopes := make([]string, 0, len(byHour))
+	for s := range byHour {
+		scopes = append(scopes, s)
+	}
+	sort.Strings(scopes) // 小时桶升序；前端按需要倒序展示
+
+	out := HourModelTable{Models: top, OtherModels: other, Truncated: truncated, Hours: make([]HourModelRow, 0, len(scopes))}
+	if other > 0 {
+		out.OtherRefs = append([]ModelRef(nil), refs[len(top):]...)
+	}
+	for _, scope := range scopes {
+		row := HourModelRow{T: strings.TrimPrefix(scope, "h:"), Cells: map[string]HourModelCell{}}
+		for key, cell := range byHour[scope] {
+			if topSet[key] {
+				row.Cells[key] = *cell
+			} else {
+				row.Other.merge(cell)
+				if row.OtherCells == nil {
+					row.OtherCells = map[string]HourModelCell{}
+				}
+				row.OtherCells[key] = *cell
+			}
+			row.Total.merge(cell)
+		}
+		out.Hours = append(out.Hours, row)
+	}
+	return out
+}
+
 // CreditAgg 积分扣除统计的一行。Key 在账号维度是 UID，在模型维度是「域:模型」
 // （cn:xxx / global:xxx，与 /v1/models 的调用值同形）；行按 (域, 模型, 生效倍率)
 // 分组；Rate 仅模型维度使用；比例分母只统计与 credit 同时存在的 Token 样本。

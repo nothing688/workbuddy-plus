@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -108,6 +110,7 @@ func TestSelfUpdateCheckFindsNewer(t *testing.T) {
 		Current         string `json:"current"`
 		LatestVersion   string `json:"latest_version"`
 		UpdateAvailable bool   `json:"update_available"`
+		Status          string `json:"status"`
 		Asset           struct {
 			Name      string `json:"name"`
 			HasDigest bool   `json:"has_digest"`
@@ -118,6 +121,9 @@ func TestSelfUpdateCheckFindsNewer(t *testing.T) {
 	}
 	if !resp.Enabled || !resp.UpdateAvailable || resp.LatestVersion != "2026.10.25.1900" {
 		t.Fatalf("resp=%+v", resp)
+	}
+	if resp.Status != "update_available" {
+		t.Fatalf("status=%q, want update_available", resp.Status)
 	}
 	if !strings.Contains(resp.Asset.Name, runtime.GOOS+"-"+runtime.GOARCH) || !resp.Asset.HasDigest {
 		t.Fatalf("asset=%+v", resp.Asset)
@@ -188,6 +194,175 @@ func TestSelfUpdateRejectsBadDigest(t *testing.T) {
 	}
 }
 
+// newSelfUpdatePanelAt 起一个自定义 TLS 服务并装配面板（限流/缓存用例共用）。
+func newSelfUpdatePanelAt(t *testing.T, h http.Handler, version string) *Panel {
+	t.Helper()
+	srv := httptest.NewTLSServer(h)
+	t.Cleanup(srv.Close)
+	return New(Config{
+		Version:    version,
+		APIKey:     "test-key",
+		DataDir:    t.TempDir(),
+		HTTPClient: srv.Client(),
+		SelfUpdate: SelfUpdateConfig{
+			Enabled: true,
+			Repo:    "o/r",
+			APIBase: srv.URL,
+		},
+	})
+}
+
+// TestSelfUpdateRateLimitAndCache 403 + 配额为 0 时报「限流」并给出重置时间，
+// 不能误报成 token 无效；同一分钟内重复查询命中 60 秒缓存，force=1 强制刷新。
+func TestSelfUpdateRateLimitAndCache(t *testing.T) {
+	var hits atomic.Int64
+	reset := time.Now().Add(5 * time.Minute).Unix()
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 只统计 API 调用；网页兜底这里故意 404（模拟私有/不存在），
+		// 验证失败时仍返回 API 的限流文案而不是别的东西。
+		if !strings.HasPrefix(r.URL.Path, "/repos/o/r/releases/latest") {
+			http.NotFound(w, r)
+			return
+		}
+		hits.Add(1)
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+		w.WriteHeader(http.StatusForbidden)
+	})
+	pn := newSelfUpdatePanelAt(t, h, "2026.10.1.1000")
+
+	type checkResp struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	get := func(path string) checkResp {
+		t.Helper()
+		rec := doAccountMetaRequest(t, pn, "GET", path, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s code=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		var resp checkResp
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	resp := get("/panel/api/selfupdate/check")
+	if resp.Status != "unknown" {
+		t.Fatalf("status=%q, want unknown", resp.Status)
+	}
+	if !strings.Contains(resp.Reason, "限流") || !strings.Contains(resp.Reason, "重置") {
+		t.Fatalf("reason=%q，应说明限流与重置时间，且不能误导成 token 问题", resp.Reason)
+	}
+	if strings.Contains(resp.Reason, "token 无效") {
+		t.Fatalf("reason=%q 不应把配额用尽报成 token 无效", resp.Reason)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("首次查询应打 1 次上游，实际 %d", hits.Load())
+	}
+
+	// 60 秒内再查（维护页第二条查询）：命中缓存，不再消耗 GitHub 配额。
+	_ = get("/panel/api/selfupdate/check")
+	if hits.Load() != 1 {
+		t.Fatalf("缓存期内不应重复打上游，实际 %d", hits.Load())
+	}
+
+	// 手点「检查更新」：force=1 绕过缓存。
+	_ = get("/panel/api/selfupdate/check?force=1")
+	if hits.Load() != 2 {
+		t.Fatalf("force=1 应强制刷新，实际 %d", hits.Load())
+	}
+}
+
+// TestSelfUpdateWebFallbackWithoutToken API 被限流（无 token）时，退回网页 302
+// 解析最新 tag 并拼出资产地址——公开仓库的用户不建 PAT 也能检查更新。
+func TestSelfUpdateWebFallbackWithoutToken(t *testing.T) {
+	var apiHits, webHits atomic.Int64
+	const tag = "v2026.10.25.1900"
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// API 路径也以 /releases/latest 结尾，必须先判前缀。
+		if strings.HasPrefix(r.URL.Path, "/repos/o/r/releases/latest") {
+			apiHits.Add(1)
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Minute).Unix(), 10))
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			webHits.Add(1)
+			w.Header().Set("Location", "https://"+r.Host+"/o/r/releases/tag/"+tag)
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/o/r/releases/download/") {
+			w.Header().Set("Content-Length", "1234")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	pn := newSelfUpdatePanelAt(t, h, "2026.10.1.1000")
+
+	rec := doAccountMetaRequest(t, pn, "GET", "/panel/api/selfupdate/check?force=1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status          string `json:"status"`
+		UpdateAvailable bool   `json:"update_available"`
+		LatestVersion   string `json:"latest_version"`
+		Reason          string `json:"reason"`
+		Asset           struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+		} `json:"asset"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.UpdateAvailable || resp.Status != "update_available" || resp.LatestVersion != "2026.10.25.1900" {
+		t.Fatalf("resp=%+v，网页兜底应能给出最新版本", resp)
+	}
+	wantAsset := fmt.Sprintf("wb2api-panel-2026.10.25.1900-%s-%s.zip", runtime.GOOS, runtime.GOARCH)
+	if resp.Asset.Name != wantAsset || resp.Asset.Size != 1234 {
+		t.Fatalf("asset=%+v，want %s/1234", resp.Asset, wantAsset)
+	}
+	if apiHits.Load() != 1 || webHits.Load() != 1 {
+		t.Fatalf("apiHits=%d webHits=%d，want 各 1 次（先 API 后网页兜底）", apiHits.Load(), webHits.Load())
+	}
+}
+
+// TestSelfUpdateCheckUpToDate 已是最新：status=latest（前端据此显示「已是最新」，
+// 而不是把 reason 里的版本说明误判成「无法确认」）。
+func TestSelfUpdateCheckUpToDate(t *testing.T) {
+	zipBytes := buildReleaseZip(t, "BIN")
+	sum := sha256.Sum256(zipBytes)
+	pn, _, _ := newSelfUpdatePanel(t, "2026.10.25.1900", zipBytes, "sha256:"+hex.EncodeToString(sum[:]))
+
+	rec := doAccountMetaRequest(t, pn, "GET", "/panel/api/selfupdate/check", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		UpdateAvailable bool   `json:"update_available"`
+		Status          string `json:"status"`
+		Reason          string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.UpdateAvailable {
+		t.Fatalf("同版本不应判有更新：%+v", resp)
+	}
+	if resp.Status != "latest" {
+		t.Fatalf("status=%q, want latest（reason=%q）", resp.Status, resp.Reason)
+	}
+	if !strings.Contains(resp.Reason, "已是最新") {
+		t.Fatalf("reason=%q，应保留版本对比说明", resp.Reason)
+	}
+}
+
 // TestSelfUpdateDisabled 默认关：check 给出原因，apply 403。
 func TestSelfUpdateDisabled(t *testing.T) {
 	pn := New(Config{Version: "2026.10.1.1000", APIKey: "test-key", DataDir: t.TempDir()})
@@ -195,10 +370,14 @@ func TestSelfUpdateDisabled(t *testing.T) {
 	var resp struct {
 		Enabled bool   `json:"enabled"`
 		Reason  string `json:"reason"`
+		Status  string `json:"status"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.Enabled || !strings.Contains(resp.Reason, "未启用") {
 		t.Fatalf("resp=%+v", resp)
+	}
+	if resp.Status != "disabled" {
+		t.Fatalf("status=%q, want disabled", resp.Status)
 	}
 	rec = doAccountMetaRequest(t, pn, "POST", "/panel/api/selfupdate/apply", "")
 	if rec.Code != http.StatusForbidden {

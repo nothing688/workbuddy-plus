@@ -23,6 +23,15 @@ type Pool struct {
 	activeGroup string
 	// extraGroups 手工创建的空分组（无账号成员），随 state.json 持久化。
 	extraGroups map[string]bool
+	// groupBreakers 分组级熔断台账：key = group\x1f realm\x1f model。
+	// 组内对该模型已无可服务账号时登记，任一账号恢复可服务即删除；只作路由判定
+	// 与面板展示用，不落盘（重启后由首个请求重新判定，与冷却状态本身同源）。
+	groupBreakers map[string]*GroupBreakerRow
+	// groupBreakerOn 分组熔断改道总开关（pool.group_breaker，默认开）。关闭后
+	// PickExcludingForRealmGroupWithFailover 退化为组内选号、粘性不跨组沿用，
+	// 与引入该机制前逐字一致。用 atomic 承载：选号路径每请求读一次，不值得为
+	// 一个 bool 抢 p.mu。
+	groupBreakerOn atomic.Bool
 	// store 池状态快照镜像（redisstore.Store）；nil = 无需镜像（未配置 Redis / Noop 之外也可能 nil）。
 	// SaveState/LoadState 经它接线，与本地 state.json 并存作启动恢复备份。
 	store StoreSnapshotter
@@ -129,11 +138,13 @@ func New(stateFp string) *Pool {
 		// config 显式 "0" 关停（SetCostExploreInterval(0)）。
 		costExploreInterval: defaultCostExploreInterval,
 		exploreLast:         map[string]time.Time{},
+		groupBreakers:       map[string]*GroupBreakerRow{},
 	}
 	if stateFp != "" {
 		p.load()
 		p.startFlusher()
 	}
+	p.groupBreakerOn.Store(true)
 	return p
 }
 

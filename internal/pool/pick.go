@@ -55,10 +55,17 @@ func (p *Pool) PickExcludingForRealmGroup(tried map[string]bool, reqModel, realm
 // pick 在 healthy 候选集中按权重加权随机选出账号，并记录 lastUsed（防并发撞号）。
 // reqModel 非空时把健康口径换成 healthyForModel（6004 模型豁免生效）。
 // realm 非空时候选过滤叠加 Realm()==realm 谓词（分池选号域）。
-// filter 非 nil 时叠加为额外的候选与门（目前仅供按分组选号使用）；nil = 不过滤。
+// filter 非 nil 时叠加为额外的候选与门（按分组选号 / 分组熔断改道使用）；nil = 不过滤。
 func (p *Pool) pick(tried map[string]bool, reqModel, realm string, filter func(*entry) bool) *auth.Auth {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.pickLocked(tried, reqModel, realm, filter)
+}
+
+// pickLocked 是 pick 的持锁实现：调用方必须已持有 p.mu 写锁。
+// 拆出来供分组熔断在同一把锁里先判定「组内是否全冷」再决定选本组还是组外，
+// 避免两次加锁之间组内账号状态变化导致判定与选号不一致。
+func (p *Pool) pickLocked(tried map[string]bool, reqModel, realm string, filter func(*entry) bool) *auth.Auth {
 	now := time.Now()
 	realmOK := func(e *entry) bool { return realm == "" || e.a.Realm() == realm }
 	// 不健康 / 在途占满 / 保留积分停牌：都不接单（判据统一在 Pool.selectable；
