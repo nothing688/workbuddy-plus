@@ -135,6 +135,8 @@ const ctx = {
   // 状态列的原因行由 statusWhyHtml 生成（定义在抽取范围之外），本测试只关心
   // 暂停徽标/按钮，用空串占位即可。
   statusWhyHtml: () => '',
+  // 方向/零宽控制符清洗（定义在 renderAccounts 之前的抽取范围外）：测试里按恒等注入。
+  stripBidi: v => String(v == null ? '' : v),
   // 任务暂停三档状态（本轮新增）：默认全未暂停，下面单独喂 true 断言徽标与按钮。
   tasksPausedAll: false,
   pausedAccounts: new Set(),

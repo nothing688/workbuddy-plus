@@ -1452,11 +1452,13 @@ input::placeholder { color: var(--ink-3); }
    （.mid 撑开）用的，选择器没限定表，漏到账号表后中文昵称会按字换行——
    窄卡片里就出现「怎」单独一行、「样共勉」挤在下一行的断字。这里按表名收口。 */
 #accTable .who .nm {
-  display: flex; align-items: center; gap: 6px; min-width: 0;
+  display: flex; align-items: center; justify-content: flex-start; gap: 6px; min-width: 0;
   white-space: nowrap; word-break: normal; overflow: hidden;
 }
 #accTable .who .nm .nm-btn {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 名字一律按 LTR 段落排版：昵称里混进 RTL 字符时，bidi 会把整行贴到右边 */
+  direction: ltr; unicode-bidi: isolate;
 }
 #accTable .who .nm .realm-tag { flex: none; }
 

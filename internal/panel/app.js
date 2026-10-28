@@ -641,6 +641,14 @@ function statusWhyHtml(s, pr) {
     '</div>';
 }
 
+// stripBidi 去掉不可见的方向 / 零宽控制符。
+// 昵称与备注来自上游或人工粘贴，若带上 RLM(U+200F) / LRM / 嵌入符，整行会被 bidi
+// 算法按 RTL 排版——表现就是「名字贴到右边、UID 贴左边」，看着像没对齐。
+// 这些字符不携带任何可见信息，直接剔除最稳。
+function stripBidi(v) {
+  return String(v == null ? '' : v).replace(/[\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
+}
+
 function renderAccounts(list, filtered, probe) {
   const tb = $('accBody');
   if (!list.length) {
@@ -740,8 +748,8 @@ function renderAccounts(list, filtered, probe) {
     // title 交代原分组与恢复后自动回归。group_parked 为真但 disabled 为假属于异常残留
     // （书签没清掉），此时按普通分组展示，不能误标成已禁用。
     const parked = !!s.group_parked && !!s.disabled;
-    const prevGrp = String(s.prev_group == null ? '' : s.prev_group);
-    const noteText = String(s.note == null ? '' : s.note);
+    const prevGrp = stripBidi(s.prev_group);
+    const noteText = stripBidi(s.note);
     // parked（已移入「已禁用」组）的账号：状态标签只说明「已禁用」，分组归属就丢了。
     // 这里补一个不可点击的红徽章显示**禁用前的分组**——禁用号不该看丢归属；
     // 用 span 而不是 button，避免误点触发 movegroup 把书签清掉（那会让解冻后回错组）。
@@ -749,13 +757,14 @@ function renderAccounts(list, filtered, probe) {
       ? '<span class="grp-badge parked" title="' + esc('已移入「已禁用」组；禁用前的分组：' + (prevGrp || '未分组') + '（解冻后自动回归）') + '">原 ' + esc(prevGrp || '未分组') + '</span>'
       : '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
         '" title="' + esc(grp ? '分组：' + grp + '（点击移动到其他组）' : '未分组（点击入组）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
-    const nickHtml = s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>';
+    const nick = stripBidi(s.nickname);
+    const nickHtml = nick ? esc(nick) : '<span style="color:var(--ink-3)">未命名</span>';
     const nameHtml = noteText
       ? esc(noteText) + '<span class="rm-ghost">' + nickHtml + '</span>'
       : nickHtml;
     // 名称单行省略（见 index.html #accTable .who .nm），完整值放进 title：
     // 备注优先，没有备注就是昵称——否则被截断时没地方看全名。
-    const fullName = noteText || String(s.nickname || '');
+    const fullName = noteText || nick;
     const nameCell = '<button class="nm-btn" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
       '" title="' + esc((fullName ? fullName + ' · ' : '') + (noteText ? '名称备注（点击修改）' : '点击添加账号名称备注')) + '">' + nameHtml + '</button>';
     // 勾选按 uid 从模块级集合恢复：5s 轮询重建 tbody 后选中行不会掉。
