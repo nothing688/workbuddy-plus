@@ -3203,6 +3203,7 @@ function openAdd() {
   $('importFile').value = ''; $('importFile').disabled = false;
   $('importPaste').value = ''; $('importPaste').disabled = false;
   $('btnImportPaste').disabled = false;
+  if ($('importDrop')) $('importDrop').classList.remove('drag');
   $('importGroup').value = '';
   $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
@@ -3439,6 +3440,35 @@ if ($('btnImportPasteClear')) $('btnImportPasteClear').onclick = () => {
   $('importPaste').value = '';
   $('importPaste').focus();
 };
+// 拖放导入：把文件拖到虚线框里直接走同一条 runImport；点框等于点「选择文件」。
+// 导入进行中（文件框被禁用）忽略拖放，避免重复提交同一批文件。
+const dz = $('importDrop');
+if (dz) {
+  const stop = e => { e.preventDefault(); e.stopPropagation(); };
+  dz.onclick = () => { if (!$('importFile').disabled) $('importFile').click(); };
+  dz.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dz.click(); } };
+  dz.addEventListener('dragenter', e => { stop(e); if (!$('importFile').disabled) dz.classList.add('drag'); });
+  dz.addEventListener('dragover', e => { stop(e); if (!$('importFile').disabled) dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', e => { stop(e); dz.classList.remove('drag'); });
+  dz.addEventListener('dragend', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', e => {
+    stop(e);
+    dz.classList.remove('drag');
+    if ($('importFile').disabled) return;
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    if (!files.length) { toast('没识别到文件；粘贴内容请用上面的文本框', 'warn'); return; }
+    runImport(files);
+  });
+}
+// 拖到导入面板的空白处（非虚线框）时吞掉默认行为：否则浏览器会直接打开该文件，
+// 把当前面板页顶掉。
+const importPanel = $('addTabImport');
+if (importPanel) {
+  ['dragover', 'drop'].forEach(ev => importPanel.addEventListener(ev, e => {
+    if (e.target === dz) return;
+    e.preventDefault();
+  }));
+}
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
