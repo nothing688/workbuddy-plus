@@ -1160,6 +1160,8 @@ input::placeholder { color: var(--ink-3); }
 }
 .dropzone:hover { border-color: var(--accent); color: var(--accent); }
 .dropzone.drag { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+/* 对话框级拖放高亮：导入标签页整块发光，提示「放这儿就行」 */
+#addTabImport.drop-active { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); box-shadow: inset 0 0 0 2px var(--accent); border-radius: 10px; }
 
 /* ── 标签 / 徽章：统一胶囊与内描边 ─────────────────────────────── */
 .tag { padding: 2px 9px; font-weight: 550; letter-spacing: .01em; }
@@ -2765,7 +2767,7 @@ input::placeholder { color: var(--ink-3); }
           <button class="xs" id="btnImportPasteClear" title="清空上面的粘贴框">清空</button>
         </div>
         <div id="importDrop" class="dropzone" role="button" tabindex="0"
-             title="把 JSON / JSONL 文件拖到这里（可一次拖多个），或点此选择文件">把文件拖到这里导入，或点此选择文件</div>
+             title="整个对话框都可以接住拖进来的文件（可一次拖多个）；点这里等同选择文件">把文件拖到本窗口任意位置导入，或点此选择文件</div>
         <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
         <!-- 导入进度：按文件逐个 POST，每完成一个文件刷新一次（含已入池/跳过计数）。
              导入 30 个文件时它不是装饰——没有它整段过程只有一个「没反应」的对话框。 -->

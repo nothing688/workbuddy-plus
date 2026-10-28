@@ -3440,35 +3440,56 @@ if ($('btnImportPasteClear')) $('btnImportPasteClear').onclick = () => {
   $('importPaste').value = '';
   $('importPaste').focus();
 };
-// 拖放导入：把文件拖到虚线框里直接走同一条 runImport；点框等于点「选择文件」。
-// 导入进行中（文件框被禁用）忽略拖放，避免重复提交同一批文件。
+// 拖放导入：整个「添加账号」对话框都是投放区（导入标签页打开时），不用对准虚线框。
+// 虚线框保留为可点击入口 —— 有人习惯点，有人习惯拖。
 const dz = $('importDrop');
 if (dz) {
-  const stop = e => { e.preventDefault(); e.stopPropagation(); };
   dz.onclick = () => { if (!$('importFile').disabled) $('importFile').click(); };
   dz.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dz.click(); } };
-  dz.addEventListener('dragenter', e => { stop(e); if (!$('importFile').disabled) dz.classList.add('drag'); });
-  dz.addEventListener('dragover', e => { stop(e); if (!$('importFile').disabled) dz.classList.add('drag'); });
-  dz.addEventListener('dragleave', e => { stop(e); dz.classList.remove('drag'); });
-  dz.addEventListener('dragend', () => dz.classList.remove('drag'));
-  dz.addEventListener('drop', e => {
-    stop(e);
-    dz.classList.remove('drag');
-    if ($('importFile').disabled) return;
-    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-    if (!files.length) { toast('没识别到文件；粘贴内容请用上面的文本框', 'warn'); return; }
+}
+
+// 对话框级拖放：只在「导入 JSON」标签页激活时生效（其它标签页拖文件没有导入语义）。
+const addDlg = document.querySelector('#addVeil .dlg');
+const importTab = $('addTabImport');
+const importTabOpen = () => !!(importTab && !importTab.hidden);
+const droppedFiles = e => Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+const isFileDrag = e => {
+  const t = e.dataTransfer && e.dataTransfer.types;
+  return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
+};
+if (addDlg && importTab) {
+  const mark = on => importTab.classList.toggle('drop-active', on);
+  addDlg.addEventListener('dragenter', e => {
+    if (!importTabOpen() || !isFileDrag(e) || $('importFile').disabled) return;
+    e.preventDefault(); mark(true);
+  });
+  addDlg.addEventListener('dragover', e => {
+    if (!importTabOpen() || !isFileDrag(e) || $('importFile').disabled) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    mark(true);
+  });
+  addDlg.addEventListener('dragleave', e => {
+    // 在子元素之间移动也会触发 dragleave：只有真正离开对话框才取消高亮。
+    if (addDlg.contains(e.relatedTarget)) return;
+    mark(false);
+  });
+  addDlg.addEventListener('drop', e => {
+    if (!importTabOpen() || !isFileDrag(e) || $('importFile').disabled) return;
+    e.preventDefault();
+    mark(false);
+    const files = droppedFiles(e);
+    if (!files.length) { toast('没识别到文件；粘贴内容请用文本框', 'warn'); return; }
+    // 允许多层目录拖入：只取文件名像账号文件的，真解析仍交给后端（只有一个口径）。
     runImport(files);
   });
 }
-// 拖到导入面板的空白处（非虚线框）时吞掉默认行为：否则浏览器会直接打开该文件，
-// 把当前面板页顶掉。
-const importPanel = $('addTabImport');
-if (importPanel) {
-  ['dragover', 'drop'].forEach(ev => importPanel.addEventListener(ev, e => {
-    if (e.target === dz) return;
-    e.preventDefault();
-  }));
-}
+// 任何位置的残留 drop 默认行为都要吞掉：否则浏览器会直接打开文件把面板顶掉。
+['dragover', 'drop'].forEach(ev => document.addEventListener(ev, e => {
+  if (e.defaultPrevented) return;
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+}));
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
