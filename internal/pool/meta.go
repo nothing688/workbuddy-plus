@@ -1,9 +1,8 @@
 // meta.go 账号「分组 + 备注」：运维自定义的元数据（非凭证、非健康状态）。
 //
 // 定位：分组只用于「按组选号」（PickExcludingForRealmGroup）与面板归类，不参与任何
-// 健康判定（冷却/熔断/降权）。唯一的联动是「禁用时移入 DisabledGroup、恢复时回归
-// 原组」（书签语义，见 entry.prevGroup）：那是禁用状态机的一次副作用，仍然只改
-// group 及其书签，不动任何惩罚字段。
+// 健康判定（冷却/熔断/降权）。与禁用状态**没有联动**：禁用只关业务资格，不改写归属
+// （2026-10-28 起取消「禁用搬进『已禁用』组」，面板改为把禁用号排在列表末尾）。
 // 存储：stateAccount.Group/Note/PrevGroup/GroupParked，随 state.json 与 Redis 快照
 // 一起往返（同源结构）。
 package pool
@@ -14,8 +13,11 @@ import (
 	"time"
 )
 
-// DisabledGroup 禁用账号的统一归集分组：账号被禁用（自动或手动）时移入此处，
-// 恢复时回归禁用前的分组。导出供面板据此显示特殊分组/判断。
+// DisabledGroup 历史的「禁用账号归集分组」名。
+//
+// 2026-10-28 起**不再使用**：禁用不改分组，面板把禁用号置底，组外改道也不往这里送。
+// 常量保留有两个用途：读旧 state / 快照时识别并迁移（persist.go），以及分组熔断
+// 的兜底过滤（groupbreaker.go）继续排除这个历史组名。
 const DisabledGroup = "已禁用"
 
 // SetMeta 设置账号的分组名与备注（两个值都 TrimSpace；空串 = 清除）。

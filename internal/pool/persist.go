@@ -195,6 +195,15 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			prevGroup:                s.PrevGroup,
 			groupParked:              s.GroupParked,
 		}
+		// 迁移（2026-10-28）：停用「禁用即搬进『已禁用』组」。历史 state 里还在该组、
+		// 且有回归书签的号，这里一次性搬回原组并清书签——否则分组下拉会一直挂着一个
+		// 没人再写入的「已禁用」组，禁用号的归属也永远显示成停放区。
+		if e.group == DisabledGroup && e.groupParked {
+			e.group = e.prevGroup
+			e.prevGroup = ""
+			e.groupParked = false
+			migratedState = true
+		}
 		// 亚积分余量合法性：越界/非有限值（旧数据或手改）清 0，保守回退整数口径。
 		if math.IsNaN(e.creditsRemainder) || math.IsInf(e.creditsRemainder, 0) || e.creditsRemainder < -0.5 || e.creditsRemainder >= 0.5 {
 			e.creditsRemainder = 0

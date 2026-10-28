@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestMetaRoundTrip(t *testing.T) {
 func TestGroupCounts(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"}) // team-a，健康
-	p.Add(&auth.Auth{UID: "u2"}) // team-a，禁用 → 落入「已禁用」
+	p.Add(&auth.Auth{UID: "u2"}) // team-a，禁用（仍留在 team-a，只不健康）
 	p.Add(&auth.Auth{UID: "u3"}) // team-b，冷却中
 	p.Add(&auth.Auth{UID: "u4"}) // 未分组，健康
 	p.Add(&auth.Auth{UID: "u5"}) // team-b，健康
@@ -93,9 +94,8 @@ func TestGroupCounts(t *testing.T) {
 
 	got := p.GroupCounts()
 	want := []GroupInfo{
-		{Name: "team-a", Total: 1, Healthy: 1},
+		{Name: "team-a", Total: 2, Healthy: 1}, // 禁用号不搬组：总数含它，健康数不含
 		{Name: "team-b", Total: 2, Healthy: 1},
-		{Name: DisabledGroup, Total: 1, Healthy: 0},
 		{Name: "", Total: 1, Healthy: 1}, // 未分组排最后
 	}
 	if len(got) != len(want) {
@@ -223,67 +223,62 @@ func TestPickExcludingForRealmGroupEmptyEqualsOld(t *testing.T) {
 
 // TestDisableParksGroupAndReviveRestores 覆盖主路径：teamA → 禁用 → 已禁用
 // （书签记录原组）→ Revive → 回到 teamA 且标记清空。两个恢复入口都要生效。
-func TestDisableParksGroupAndReviveRestores(t *testing.T) {
+func TestDisableKeepsGroupAndReviveKeepsIt(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})
 	p.SetMeta("u1", "teamA", "")
 
+	// 2026-10-28 起：禁用只关业务资格，不改写分组归属（面板改为把禁用号置底）。
 	p.Disable("u1", "401")
 	st, ok := p.Status("u1")
 	if !ok {
 		t.Fatal("Status(u1) not found")
 	}
-	if st.Group != DisabledGroup {
-		t.Fatalf("after Disable group=%q, want %q", st.Group, DisabledGroup)
-	}
-	if !st.GroupParked || st.PrevGroup != "teamA" {
-		t.Fatalf("after Disable parked=%v prev=%q, want true/teamA", st.GroupParked, st.PrevGroup)
+	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("after Disable group=%q parked=%v prev=%q, want teamA/false/\"\"",
+			st.Group, st.GroupParked, st.PrevGroup)
 	}
 
-	// Revive：回归原组并清书签。
+	// Revive 只恢复资格，分组原样不动。
 	if !p.Revive("u1") {
 		t.Fatal("Revive(u1) = false, want true")
 	}
 	st, _ = p.Status("u1")
-	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
-		t.Fatalf("after Revive group=%q parked=%v prev=%q, want teamA/false/\"\"", st.Group, st.GroupParked, st.PrevGroup)
+	if st.Disabled || st.Group != "teamA" {
+		t.Fatalf("after Revive disabled=%v group=%q, want false/teamA", st.Disabled, st.Group)
 	}
 
-	// ReviveDisabled：同一套书签语义。
+	// ReviveDisabled 同口径。
 	p.Disable("u1", "401")
 	p.ReviveDisabled("u1")
 	st, _ = p.Status("u1")
-	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
-		t.Fatalf("after ReviveDisabled group=%q parked=%v prev=%q, want teamA/false/\"\"", st.Group, st.GroupParked, st.PrevGroup)
+	if st.Disabled || st.Group != "teamA" {
+		t.Fatalf("after ReviveDisabled disabled=%v group=%q, want false/teamA", st.Disabled, st.Group)
 	}
 }
 
-// TestDisableParksUngroupedAccount 原分组为空（未分组）是一次有效记录：
-// 禁用后同样进「已禁用」，恢复后必须回到空分组，而不是留在「已禁用」。
-func TestDisableParksUngroupedAccount(t *testing.T) {
+// TestDisableKeepsUngroupedAccount 未分组账号被禁用后仍是未分组——面板把它排到
+// 列表末尾，而不是塞进一个「已禁用」分组。
+func TestDisableKeepsUngroupedAccount(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})
 	// 不调 SetMeta：group 为空串（未分组）。
 
 	p.Disable("u1", "401")
 	st, _ := p.Status("u1")
-	if st.Group != DisabledGroup || !st.GroupParked {
-		t.Fatalf("after Disable group=%q parked=%v, want %q/true", st.Group, st.GroupParked, DisabledGroup)
-	}
-	if st.PrevGroup != "" {
-		t.Fatalf("ungrouped prev=%q, want empty (记录存在但值为空)", st.PrevGroup)
+	if st.Group != "" || st.GroupParked {
+		t.Fatalf("after Disable group=%q parked=%v, want \"\"/false", st.Group, st.GroupParked)
 	}
 
 	p.ReviveDisabled("u1")
-	st, _ = p.Status("u1")
-	if st.Group != "" || st.GroupParked {
-		t.Fatalf("after Revive group=%q parked=%v, want \"\"/false (回到未分组)", st.Group, st.GroupParked)
+	if st, _ = p.Status("u1"); st.Group != "" || st.Disabled {
+		t.Fatalf("after Revive group=%q disabled=%v, want \"\"/false", st.Group, st.Disabled)
 	}
 }
 
-// TestDisableAgainKeepsPrevGroup 已禁用账号再禁用（只更新 reason）不得覆盖原分组，
-// 否则恢复后会被搬到「已禁用」自身，永远回不到 teamA。
-func TestDisableAgainKeepsPrevGroup(t *testing.T) {
+// TestDisableTwiceKeepsGroup 已禁用账号再禁用（只更新 reason）不得改写分组，
+// 也不能凭空写书签——现在根本没有「搬组」这回事。
+func TestDisableTwiceKeepsGroup(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})
 	p.SetMeta("u1", "teamA", "")
@@ -291,11 +286,9 @@ func TestDisableAgainKeepsPrevGroup(t *testing.T) {
 	p.Disable("u1", "401")
 	p.Disable("u1", "manual ban")
 	st, _ := p.Status("u1")
-	if st.Group != DisabledGroup {
-		t.Fatalf("repeat disable group=%q, want %q", st.Group, DisabledGroup)
-	}
-	if !st.GroupParked || st.PrevGroup != "teamA" {
-		t.Fatalf("repeat disable parked=%v prev=%q, want true/teamA", st.GroupParked, st.PrevGroup)
+	if st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("repeat disable group=%q parked=%v prev=%q, want teamA/false/\"\"",
+			st.Group, st.GroupParked, st.PrevGroup)
 	}
 	if st.DisabledReason != "manual ban" {
 		t.Fatalf("repeat disable reason=%q, want manual ban", st.DisabledReason)
@@ -340,47 +333,39 @@ func TestDisableThenSetMetaWins(t *testing.T) {
 	}
 }
 
-// TestGroupParkRoundTrip 落盘 → 重载后书签保留（含「原分组为空」这一形态），
-// 且重载后恢复仍能回归原组。
-func TestGroupParkRoundTrip(t *testing.T) {
+// TestLegacyDisabledGroupMigratesOnLoad 历史 state（禁用号被搬进「已禁用」并留书签）
+// 载入时一次性搬回原组，避免分组下拉一直挂着一个没人再写入的「已禁用」组。
+func TestLegacyDisabledGroupMigratesOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
+	raw := `{"accounts":{
+		"u1":{"credits":10,"disabled":true,"reason":"legacy","group":"` + DisabledGroup + `","prev_group":"teamA","group_parked":true},
+		"u2":{"credits":10,"disabled":true,"reason":"legacy","group":"` + DisabledGroup + `","prev_group":"","group_parked":true}
+	}}`
+	if err := os.WriteFile(fp, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Add(&auth.Auth{UID: "u2"})
-	p.SetMeta("u1", "teamA", "")
-	p.Disable("u1", "401")
-	p.Disable("u2", "401") // 未分组 → 书签值为空串
-	p.Flush()
-	p.Close()
 
-	p2 := New(fp)
-	defer p2.Close()
-	p2.Add(&auth.Auth{UID: "u1"})
-	p2.Add(&auth.Auth{UID: "u2"})
-
-	st, ok := p2.Status("u1")
-	if !ok || st.Group != DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
-		t.Fatalf("reloaded u1=%+v ok=%v, want 已禁用/parked/teamA", st, ok)
+	if st, ok := p.Status("u1"); !ok || st.Group != "teamA" || st.GroupParked {
+		t.Fatalf("u1=%+v ok=%v, want group=teamA 且书签清空", st, ok)
 	}
-	st, ok = p2.Status("u2")
-	if !ok || st.Group != DisabledGroup || !st.GroupParked || st.PrevGroup != "" {
-		t.Fatalf("reloaded u2=%+v ok=%v, want 已禁用/parked/\"\"", st, ok)
+	if st, ok := p.Status("u2"); !ok || st.Group != "" || st.GroupParked {
+		t.Fatalf("u2=%+v ok=%v, want group=\"\" 且书签清空", st, ok)
 	}
-
-	p2.Revive("u1")
-	p2.Revive("u2")
-	if st, _ := p2.Status("u1"); st.Group != "teamA" {
-		t.Fatalf("reloaded Revive u1 group=%q, want teamA", st.Group)
-	}
-	if st, _ := p2.Status("u2"); st.Group != "" {
-		t.Fatalf("reloaded Revive u2 group=%q, want empty", st.Group)
+	// 迁移不应改动禁用状态本身。
+	if st, _ := p.Status("u1"); !st.Disabled {
+		t.Fatal("迁移只搬组，不该把号解禁")
 	}
 }
 
-// TestGroupParkSnapshotRestore Redis 快照恢复路径（adoptSnapshot 复用
-// applyAccountsLocked）同样带上 prevGroup/groupParked。
-func TestGroupParkSnapshotRestore(t *testing.T) {
+// TestSnapshotKeepsOriginalGroup Redis 快照恢复路径（adoptSnapshot 复用
+// applyAccountsLocked）保留分组归属：禁用不再搬组，快照里 group 就是 teamA。
+func TestSnapshotKeepsOriginalGroup(t *testing.T) {
 	// 快照镜像只在有 state.json 路径时随落盘发生（saveLocked 先判 stateFp）。
 	p := New(filepath.Join(t.TempDir(), "state.json"))
 	p.Add(&auth.Auth{UID: "u1"})
@@ -406,8 +391,8 @@ func TestGroupParkSnapshotRestore(t *testing.T) {
 	p2.RestoreFromSnapshot()
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
-	if !ok || st.Group != DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
-		t.Fatalf("snapshot u1=%+v ok=%v, want 已禁用/parked/teamA", st, ok)
+	if !ok || st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("snapshot u1=%+v ok=%v, want teamA/未停车/无书签", st, ok)
 	}
 	p2.Revive("u1")
 	if st, _ := p2.Status("u1"); st.Group != "teamA" {

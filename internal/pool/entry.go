@@ -120,12 +120,10 @@ type Status struct {
 	// 不参与健康判定。
 	Group string `json:"group"`
 	Note  string `json:"note"`
-	// PrevGroup / GroupParked 禁用分组书签：账号被禁用时自动移入 DisabledGroup，
-	// 书签记下原分组；恢复时回归原组并清空书签。
-	//   - GroupParked=false：没有书签（从未因禁用被搬动，或已恢复 / 被人工移动清掉）；
-	//   - GroupParked=true 且 PrevGroup=""：禁用前就是未分组——与「没记录」区分开，
-	//     恢复时必须回到空分组而不是留在 DisabledGroup。
-	// 仅供面板展示「从哪个组来的」，不参与健康判定。
+	// PrevGroup / GroupParked 禁用分组书签（历史字段，2026-10-28 起不再写入）。
+	// 旧语义是「禁用即搬进 DisabledGroup，恢复时搬回」；现在禁用不改分组，面板改为
+	// 把禁用号排到列表末尾。字段保留只为读旧 state / 快照时做一次性迁移（见
+	// persist.go 的迁移分支），不参与健康判定。
 	PrevGroup   string `json:"prev_group"`
 	GroupParked bool   `json:"group_parked"`
 	// Enterprise 企业版账号（auth.EnterpriseID 非空，计算值不落盘）。
@@ -266,12 +264,9 @@ type entry struct {
 	// 只影响按组选号（PickExcludingForRealmGroup）与面板展示，不参与健康判定。
 	group string
 	note  string
-	// prevGroup / groupParked 禁用分组书签（见 transition.go 的 disableLocked）。
-	// 账号从「非禁用」转为「禁用」时，若当前不在 DisabledGroup，就把原分组记在这里
-	// 并移入 DisabledGroup；Revive/ReviveDisabled 据此回归原组。
-	// groupParked 是「确有书签」的权威标志：prevGroup 为空串同样是合法记录
-	//（禁用前未分组），不能拿空串当「没记录」。人工改分组（SetMeta）会清掉两者。
-	// 持久化（stateAccount.PrevGroup/GroupParked）：重启后恢复仍能跳回原组。
+	// prevGroup / groupParked 历史书签（2026-10-28 起不再写入，见 persist.go 迁移）：
+	// 旧语义「禁用搬进 DisabledGroup、恢复搬回」已废弃——现在禁用不改分组，
+	// 面板把禁用号置底。保留字段只为兼容旧 state / Redis 快照。
 	prevGroup   string
 	groupParked bool
 	coolKind    CoolKind

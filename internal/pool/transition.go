@@ -56,17 +56,11 @@ func (e *entry) clearCoolingLocked() {
 // 熔断器保留：熔断是「连续 5xx 失败」信号（与授权/会话无关），禁用后再复活时
 // 熔断观测仍有效，不应被禁用覆盖。
 //
-// 分组书签：只在「非禁用 → 禁用」这一次把账号移入 DisabledGroup 并记下原分组，
-// 供 Revive/ReviveDisabled 回归。重复 disable（已禁用，只是更新 reason）不再记录
-// ——否则原分组会被 DisabledGroup 覆盖，恢复后永远回不到真正的原组。
+// 分组语义（2026-10-28 变更）：禁用**不再**把账号搬进「已禁用」分组——分组是运维
+// 的归属信息，禁用只关它的业务资格，不该改写归属；面板改为把禁用号排在列表末尾
+// （见 app.js accVisibleList）。历史上被搬过的号在 state 载入时一次性搬回原组
+// （persist.go 的迁移分支），书签字段只为兼容旧 state 保留。
 func (p *Pool) disableLocked(e *entry, reason string) {
-	// 注意顺序：必须先用旧的 disabled 值判定「本次是否进入禁用」，再置位。
-	if !e.disabled && e.group != DisabledGroup {
-		// 原分组为空串（未分组）也是合法记录：groupParked=true 与「没记录」区分。
-		e.prevGroup = e.group
-		e.groupParked = true
-		e.group = DisabledGroup
-	}
 	e.clearCoolingLocked()
 	e.disabled = true
 	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）

@@ -140,7 +140,7 @@ func TestGroupsAggregation(t *testing.T) {
 	pl.SetMeta("u1", "teamA", "")
 	pl.SetMeta("u2", "teamA", "")
 	pl.SetMeta("u3", "teamB", "")
-	pl.Disable("u2", "401") // u2 移入「已禁用」，teamA 只剩 1 个健康号
+	pl.Disable("u2", "401") // 禁用不再搬组（2026-10-28）：u2 仍属 teamA，只是不健康
 
 	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl})
 	rec := doAccountMetaRequest(t, pn, "GET", "/panel/api/groups", "")
@@ -154,9 +154,8 @@ func TestGroupsAggregation(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []pool.GroupInfo{
-		{Name: "teamA", Total: 1, Healthy: 1},
+		{Name: "teamA", Total: 2, Healthy: 1}, // 禁用号留在原组，只影响 Healthy
 		{Name: "teamB", Total: 1, Healthy: 1},
-		{Name: pool.DisabledGroup, Total: 1, Healthy: 0},
 		{Name: "", Total: 1, Healthy: 1},
 	}
 	if len(resp.Groups) != len(want) {
@@ -168,11 +167,11 @@ func TestGroupsAggregation(t *testing.T) {
 		}
 	}
 
-	// 禁用书签：原组记在 PrevGroup，Revive 后回归 teamA（分组聚合随之恢复）。
+	// 禁用不再搬组（2026-10-28）：归属仍是 teamA，书签字段保持空。
 	st, ok := pl.Status("u2")
-	if !ok || st.Group != pool.DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
-		t.Fatalf("禁用后 group=%q parked=%v prev=%q, want %q/true/teamA",
-			st.Group, st.GroupParked, st.PrevGroup, pool.DisabledGroup)
+	if !ok || st.Group != "teamA" || st.GroupParked || st.PrevGroup != "" {
+		t.Fatalf("禁用后 group=%q parked=%v prev=%q, want teamA/false/\"\"",
+			st.Group, st.GroupParked, st.PrevGroup)
 	}
 	if !pl.Revive("u2") {
 		t.Fatal("Revive(u2)=false")
@@ -399,8 +398,8 @@ func TestAccountProbeChatRevivesDisabled(t *testing.T) {
 		t.Fatal("SetMeta failed")
 	}
 	pl.Disable("u1", "401")
-	if st, _ := pl.Status("u1"); !st.Disabled || st.Group != pool.DisabledGroup || st.PrevGroup != "teamA" {
-		t.Fatalf("前置失败: disabled=%v group=%q prev=%q", st.Disabled, st.Group, st.PrevGroup)
+	if st, _ := pl.Status("u1"); !st.Disabled || st.Group != "teamA" || st.GroupParked {
+		t.Fatalf("前置失败: disabled=%v group=%q parked=%v", st.Disabled, st.Group, st.GroupParked)
 	}
 	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
 
@@ -459,13 +458,13 @@ func TestAccountProbeChatFailureKeepsDisabled(t *testing.T) {
 	if resp.OK || resp.Revived {
 		t.Fatalf("resp=%+v, want ok:false revived:false", resp)
 	}
-	if resp.Group != pool.DisabledGroup {
-		t.Fatalf("group=%q, want %q（失败不改分组）", resp.Group, pool.DisabledGroup)
+	if resp.Group != "teamA" {
+		t.Fatalf("group=%q, want teamA（失败不改分组，也不再搬进「已禁用」）", resp.Group)
 	}
 	st, _ := pl.Status("u1")
-	if !st.Disabled || st.Group != pool.DisabledGroup || !st.GroupParked || st.PrevGroup != "teamA" {
-		t.Fatalf("探测失败后状态被改：disabled=%v group=%q parked=%v prev=%q",
-			st.Disabled, st.Group, st.GroupParked, st.PrevGroup)
+	if !st.Disabled || st.Group != "teamA" || st.GroupParked {
+		t.Fatalf("探测失败后状态被改：disabled=%v group=%q parked=%v",
+			st.Disabled, st.Group, st.GroupParked)
 	}
 }
 

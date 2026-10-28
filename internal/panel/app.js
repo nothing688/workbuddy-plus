@@ -937,12 +937,17 @@ function syncStatFilter() {
 // 批量操作都用同一口径，避免「看到 10 行、实际勾了整池 200 个」。
 function accVisibleList() {
   const all = (overviewData && overviewData.accounts) || [];
-  return applyAccSort(all.filter(a => {
+  const sorted = applyAccSort(all.filter(a => {
     if (!a) return false;
     if (accGroupFilter != null && String(a.group == null ? '' : a.group) !== accGroupFilter) return false;
     if (accStatus && accStatusOf(a) !== accStatus) return false;
     return accMatchQuery(a, accQuery);
   }));
+  // 禁用号一律置底（不再单独开「已禁用」分组）：无论当前按哪列排序，它们都排在
+  // 最后一屏，组内保持排序结果。禁用是终态，运维日常不该被它们挡住视线。
+  const live = sorted.filter(a => !a.disabled);
+  const dead = sorted.filter(a => a.disabled);
+  return live.concat(dead);
 }
 
 // syncAccSortHead 把排序状态写回表头（箭头 + aria-sort），并同步 title 提示。
