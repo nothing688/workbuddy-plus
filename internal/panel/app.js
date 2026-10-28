@@ -1088,6 +1088,7 @@ function renderGroupSelect() {
       .filter(g => g.name)
       .map(g => '<option value="' + esc(g.name) + '"></option>').join('');
   }
+  renderImportGroupOptions();
 }
 
 // groupCountText 当前选中分组的 total/healthy；下拉收起后这行仍在，不用展开才知道人数。
@@ -3189,6 +3190,42 @@ function markJSONFields() {
 }
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
+// renderImportGroupOptions 导入页的「归入分组」下拉：列出现有分组（点击选择），
+// 另给「不指定」与「新建分组…」。空串 = 不动已有分组（与后端 group 语义一致）。
+// 选项没变就不重建，避免 5 秒轮询把用户正展开的下拉收起来。
+function renderImportGroupOptions() {
+  const sel = $('importGroupSel');
+  if (!sel) return;
+  const keep = sel.value;
+  const names = (groupsData || []).map(g => String(g.name == null ? '' : g.name)).filter(Boolean);
+  const uniq = names.filter((x, i) => names.indexOf(x) === i);
+  const html = '<option value="">不指定（保持各自原分组）</option>' +
+    uniq.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('') +
+    '<option value="__new__">＋ 新建分组…</option>';
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+  // 保留用户已选：已不存在（分组被删空）就退回「不指定」。
+  const stillOk = Array.from(sel.options).some(o => o.value === keep);
+  sel.value = stillOk ? keep : '';
+  syncImportGroupNew();
+}
+
+// syncImportGroupNew 选到「新建分组…」时才显示新名输入框。
+function syncImportGroupNew() {
+  const sel = $('importGroupSel'), inp = $('importGroupNew');
+  if (!sel || !inp) return;
+  const isNew = sel.value === '__new__';
+  inp.hidden = !isNew;
+  if (isNew) inp.focus();
+}
+
+// importGroupValue 当前选择的落库分组名：'' = 不指定（保持原分组）。
+function importGroupValue() {
+  const sel = $('importGroupSel');
+  if (!sel) return '';
+  if (sel.value === '__new__') return ($('importGroupNew').value || '').trim();
+  return sel.value || '';
+}
+
 function openAdd() {
   $('addVeil').classList.add('on');
   // 重置到登录标签
@@ -3203,7 +3240,9 @@ function openAdd() {
   $('importFile').value = ''; $('importFile').disabled = false;
   $('importPaste').value = ''; $('importPaste').disabled = false;
   $('btnImportPaste').disabled = false;
-  $('importGroup').value = '';
+  if ($('importGroupSel')) $('importGroupSel').value = '';
+  if ($('importGroupNew')) { $('importGroupNew').value = ''; $('importGroupNew').hidden = true; }
+  renderImportGroupOptions(); // 打开时按当前分组列表重建候选
   $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
   $('addQr').hidden = true; $('addQr').innerHTML = ''; // 上一次的 state 已作废，二维码不留
@@ -3353,7 +3392,7 @@ $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textCo
 async function runImport(files) {
   if (!files || !files.length) return;
   $('importDone').hidden = true; $('importErr').hidden = true;
-  const importGroup = ($('importGroup').value || '').trim();
+  const importGroup = importGroupValue();
   const h = {};
   const k = localStorage.getItem(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
@@ -3435,6 +3474,10 @@ if ($('btnImportPaste')) $('btnImportPaste').onclick = () => {
   runImport([new File([text], '粘贴导入.json', { type: 'application/json' })]);
   $('importPaste').value = '';
 };
+if ($('importGroupSel')) {
+  $('importGroupSel').onchange = () => syncImportGroupNew();
+  $('importGroupSel').onclick = () => renderImportGroupOptions(); // 展开前刷新一次候选
+}
 if ($('btnImportPasteClear')) $('btnImportPasteClear').onclick = () => {
   $('importPaste').value = '';
   $('importPaste').focus();
