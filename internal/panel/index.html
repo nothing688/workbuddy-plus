@@ -2734,6 +2734,12 @@ input::placeholder { color: var(--ink-3); }
           <input type="checkbox" id="importSkipGrowth"> 跳过导入后的成长任务（签到 / 余额 / 保活照常）
         </label>
         <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
+        <!-- 导入进度：按文件逐个 POST，每完成一个文件刷新一次（含已入池/跳过计数）。
+             导入 30 个文件时它不是装饰——没有它整段过程只有一个「没反应」的对话框。 -->
+        <div class="qprog" id="importProg" hidden>
+          <div class="qbar"><i id="importBar"></i></div>
+          <span class="note" id="importProgText"></span>
+        </div>
         <div id="importDone" class="state ok" hidden></div>
         <div id="importErr" class="state err" hidden></div>
       </div>

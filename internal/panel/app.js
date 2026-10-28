@@ -3168,6 +3168,10 @@ function openAdd() {
   $('addLoad').hidden = true; $('addReady').hidden = true;
   $('addDone').hidden = true; $('addErr').hidden = true;
   $('importDone').hidden = true; $('importErr').hidden = true;
+  $('importProg').hidden = true;
+  $('importBar').style.width = '0%';
+  $('importProgText').textContent = '';
+  $('importFile').value = ''; $('importFile').disabled = false;
   $('importGroup').value = '';
   $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
@@ -3322,27 +3326,50 @@ $('importFile').onchange = async () => {
   if (k) h['Authorization'] = 'Bearer ' + k;
   let imported = 0, skipped = 0, groups = 0;
   const failed = [], detail = [];
-  for (const file of files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
-    if (importGroup) fd.append('group', importGroup);
-    // 批量迁移默认允许跳过逐号上游调用，避免导入 100 个号时串行签到/查余额。
-    if ($('importSkipGrowth') && $('importSkipGrowth').checked) fd.append('skip_growth_tasks', '1');
-    try {
-      const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
-      imported += d.imported || 0;
-      skipped += d.skipped || 0;
-      if (d.group) groups++;
-      if (d.errors && d.errors.length) {
-        console.warn('import errors (' + file.name + '):', d.errors);
-        detail.push(file.name + '：' + d.errors.slice(0, 3).join('；'));
-      }
-    } catch (e) {
-      failed.push(file.name + '：' + e.message);
+  // 进度条：每完成一个文件刷新一次（导入是逐文件串行 POST 的）。
+  const prog = $('importProg'), bar = $('importBar'), ptxt = $('importProgText');
+  const paintProg = (done, name) => {
+    if (!prog) return;
+    prog.hidden = false;
+    if (bar) bar.style.width = Math.round(done / files.length * 100) + '%';
+    if (ptxt) {
+      ptxt.textContent = (done < files.length ? '导入中 ' : '已完成 ')
+        + done + '/' + files.length + ' 个文件'
+        + ' · 入池 ' + imported + ' 个'
+        + (skipped ? ' · 跳过 ' + skipped : '')
+        + (done < files.length && name ? ' · ' + name : '');
     }
+  };
+  paintProg(0, files[0] && files[0].name);
+  const input = $('importFile');
+  input.disabled = true;
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const fd = new FormData();
+      fd.append('file', file);
+      // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
+      if (importGroup) fd.append('group', importGroup);
+      // 勾选只跳过「新账号自动跑成长任务」；签到 / 余额查询照常发（见 import.go 注释）。
+      if ($('importSkipGrowth') && $('importSkipGrowth').checked) fd.append('skip_growth_tasks', '1');
+      try {
+        const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+        imported += d.imported || 0;
+        skipped += d.skipped || 0;
+        if (d.group) groups++;
+        if (d.errors && d.errors.length) {
+          console.warn('import errors (' + file.name + '):', d.errors);
+          detail.push(file.name + '：' + d.errors.slice(0, 3).join('；'));
+        }
+      } catch (e) {
+        failed.push(file.name + '：' + e.message);
+      }
+      paintProg(i + 1, files[i + 1] && files[i + 1].name);
+    }
+  } finally {
+    input.disabled = false;
   }
   if (imported || !failed.length) {
     $('importDone').hidden = false;
