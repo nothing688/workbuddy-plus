@@ -94,7 +94,7 @@ func (p *Panel) modelVerify(w http.ResponseWriter, r *http.Request) {
 		body, err := json.Marshal(map[string]any{
 			"model":      bare,
 			"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-			"max_tokens": 16,
+			"max_tokens": 64, // 同 probe_chat：思考型模型会先把小预算吃在 reasoning 上
 			"stream":     false,
 		})
 		if err != nil {
@@ -111,10 +111,15 @@ func (p *Panel) modelVerify(w http.ResponseWriter, r *http.Request) {
 			rawResp, readErr := io.ReadAll(io.LimitReader(rc, 1<<20))
 			rc.Close()
 			if readErr == nil {
-				if text, perr := probeReplyText(rawResp); perr == nil {
-					reply = text
-				} else {
+				text, reasoning, perr := probeReply(rawResp)
+				if perr != nil {
 					callErr = fmt.Errorf("parse reply: %w", perr)
+				} else if text != "" {
+					reply = text
+				} else if reasoning != "" {
+					reply = "（仅思考内容，账号可用）" // 思考型模型在 64 token 预算下的常见形态
+				} else {
+					callErr = fmt.Errorf("upstream reply has no content")
 				}
 			} else {
 				callErr = fmt.Errorf("read reply: %w", readErr)

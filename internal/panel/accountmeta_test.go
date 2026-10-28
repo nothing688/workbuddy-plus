@@ -773,18 +773,58 @@ func TestAccountProbeChatFallsBackOnModelRejection(t *testing.T) {
 	}
 }
 
-// TestAccountProbeChatEmptyContentIsInconclusive 上游回包只有思考、没有正文时
-// （思考型模型把探测预算吃满），探测必须返回「无结论」而不是「不可用」：
-//   - ok = null（前端据此显示「无法判断」，且不从顶部可用计数里扣）
-//   - 不动池状态（尤其不能禁用）
-func TestAccountProbeChatEmptyContentIsInconclusive(t *testing.T) {
+// TestAccountProbeChatReasoningOnlyIsAvailable 上游只回 reasoning_content、正文为空时
+// （思考型模型把探测预算吃光），账号应判为可用 + 带说明，而不是「无法判断」或「不可用」：
+// 上游已接受请求并正常吐 token，账号显然是活的。
+func TestAccountProbeChatReasoningOnlyIsAvailable(t *testing.T) {
 	up := &upstream.Client{
 		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
 			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
-				// 只有 reasoning_content，没有 content：与思考型模型在 16~64 token 预算下的回包同形。
 				return probeSSEResponse(
 					"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"hy3\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"思考中……\"}}]}\n\n" +
 						"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"hy3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+						"data: [DONE]\n\n"), nil
+			}
+			return probeJSONResponse(500, `{"code":500,"msg":"no models"}`), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_chat", `{"model":"cn:hy3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK           bool   `json:"ok"`
+		Inconclusive bool   `json:"inconclusive"`
+		Note         string `json:"note"`
+		Error        string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || resp.Inconclusive {
+		t.Fatalf("只有思考内容时应判可用，实际 %+v", resp)
+	}
+	if resp.Note == "" {
+		t.Fatal("应带「只回了思考内容」的说明")
+	}
+	if resp.Error != "" {
+		t.Fatalf("可用时不该带 error: %q", resp.Error)
+	}
+}
+
+// TestAccountProbeChatEmptyEnvelopeIsInconclusive 既无正文也无思考内容（内容过滤/空信封）
+// → 无结论，且不动池状态。
+func TestAccountProbeChatEmptyEnvelopeIsInconclusive(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				return probeSSEResponse(
+					"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"hy3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
 						"data: [DONE]\n\n"), nil
 			}
 			return probeJSONResponse(500, `{"code":500,"msg":"no models"}`), nil
@@ -807,13 +847,10 @@ func TestAccountProbeChatEmptyContentIsInconclusive(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.OK {
-		t.Fatal("空正文不该返回 ok=true")
-	}
-	if !resp.Inconclusive || resp.Error == "" {
-		t.Fatalf("应返回 inconclusive + error，实际 %+v", resp)
+	if resp.OK || !resp.Inconclusive || resp.Error == "" {
+		t.Fatalf("空信封应返回无结论，实际 %+v", resp)
 	}
 	if st, ok := pl.Status("u1"); !ok || st.Disabled {
-		t.Fatalf("空正文不该禁用账号：%+v", st)
+		t.Fatalf("无结论不该禁用账号：%+v", st)
 	}
 }

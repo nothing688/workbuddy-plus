@@ -330,16 +330,28 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 			resp["error"] = "read reply: " + readErr.Error()
 			break
 		}
-		reply, perr := probeReplyText(raw)
+		reply, reasoning, perr := probeReply(raw)
 		if perr != nil {
-			// 空正文 ≠ 账号不可用：最常见的是思考型模型把探测预算吃光（正文 0 字节），
-			// 也可能是内容过滤。按「无结论」返回（ok=null），面板据此显示「无法判断」
-			// 而不是「测试不可用」——后者会把它从顶部可用计数里扣掉，是误判。
 			resp["ok"] = nil
 			resp["inconclusive"] = true
-			resp["error"] = perr.Error() + "（未判定为不可用：可能是思考型模型把探测预算占满，稍后重试或指定模型）"
-			log.Printf("panel: probe_chat uid=%s model=%s 无正文（无结论）: %v", uid, bare, perr)
+			resp["error"] = perr.Error() + "（未判定为不可用：回包无法解析，稍后重试）"
+			log.Printf("panel: probe_chat uid=%s model=%s 回包无法解析（无结论）: %v", uid, bare, perr)
 			break
+		}
+		if reply == "" && reasoning == "" {
+			// 既没正文也没思考内容：上游可能给了内容过滤/空信封。按「无结论」返回
+			// （ok=null），面板据此显示「无法判断」，而不是标成「测试不可用」
+			// ——后者会把它从顶部可用计数里扣掉，是误判。
+			resp["ok"] = nil
+			resp["inconclusive"] = true
+			resp["error"] = "上游回包既无正文也无思考内容（未判定为不可用，稍后重试或指定模型）"
+			log.Printf("panel: probe_chat uid=%s model=%s 回包无正文无思考（无结论）", uid, bare)
+			break
+		}
+		if reply == "" {
+			// 只有思考内容：上游已接受请求并正常吐 token，账号可用。
+			resp["note"] = "上游只回了思考内容、未输出正文（账号可用；思考型模型在探测预算下的常见形态）"
+			log.Printf("panel: probe_chat uid=%s model=%s ok（仅思考 %d 字）", uid, bare, len([]rune(reasoning)))
 		}
 		resp["ok"] = true
 		resp["reply"] = truncateReply(reply)
@@ -432,24 +444,59 @@ func (p *Panel) probeCatalogFirstModel(a *auth.Auth) string {
 	return probeChatFallbackModel
 }
 
-// probeReplyText 从上游响应里取回复正文：先按非流式 chat.completion 解，
+// probeReply 从上游响应里取正文与思考内容：先按非流式 chat.completion 解，
 // 不成再按 SSE 聚合（upstream 强制 stream:true，生产路径基本走后者）。
-func probeReplyText(raw []byte) (string, error) {
+//
+// 为什么把 reasoning 单独返回：探测的目的只是「这个号此刻能不能发对话」。
+// 思考型模型（hy3 等默认开思考、且不支持 thinking:disabled）在探测的小预算下
+// 经常只输出 reasoning_content、正文为空——上游已经接受请求并正常吐 token，
+// 账号显然是可用的，不该因为「没正文」判成不可用。
+func probeReply(raw []byte) (text, reasoning string, err error) {
 	var obj map[string]any
 	if json.Unmarshal(raw, &obj) == nil {
-		if text := chatCompletionText(obj); text != "" {
-			return text, nil
+		text, reasoning = chatCompletionText(obj), chatCompletionReasoning(obj)
+		if text != "" || reasoning != "" {
+			return text, reasoning, nil
 		}
 	}
 	agg, err := upstream.Aggregate(bytes.NewReader(raw))
 	if err != nil {
-		return "", fmt.Errorf("parse upstream reply: %w", err)
+		return "", "", fmt.Errorf("parse upstream reply: %w", err)
 	}
-	text := chatCompletionText(agg)
-	if text == "" {
+	return chatCompletionText(agg), chatCompletionReasoning(agg), nil
+}
+
+// probeReplyText 只要正文的调用方（模型验证）用这个包装：没有正文时按解析失败返回。
+func probeReplyText(raw []byte) (string, error) {
+	text, reasoning, err := probeReply(raw)
+	if err != nil {
+		return "", err
+	}
+	if text != "" {
+		return text, nil
+	}
+	if reasoning != "" {
 		return "", fmt.Errorf("upstream reply has no content")
 	}
-	return text, nil
+	return "", fmt.Errorf("upstream reply has no content")
+}
+
+// chatCompletionReasoning 取 choices[0].message.reasoning_content（思考型模型的思考正文）。
+func chatCompletionReasoning(obj map[string]any) string {
+	choices, _ := obj["choices"].([]any)
+	if len(choices) == 0 {
+		return ""
+	}
+	first, _ := choices[0].(map[string]any)
+	msg, _ := first["message"].(map[string]any)
+	if msg == nil {
+		return ""
+	}
+	if s, ok := msg["reasoning_content"].(string); ok {
+		return s
+	}
+	s, _ := msg["reasoning"].(string)
+	return s
 }
 
 // chatCompletionText 取 choices[0].message.content（Aggregate 与非流式信封同构）。

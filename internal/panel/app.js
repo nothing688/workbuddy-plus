@@ -1156,6 +1156,9 @@ function renderProbeFloat() {
         (lat === '—' ? '' : '<span class="pf-meta">' + esc(lat) + '</span>');
       if (res.reply) body = '<div class="pf-reply">' + esc(res.reply) + '</div>';
       else if (lifted) body = '<div class="pf-reply">' + esc(res.note || '上游已解封，可以点「解冻」恢复使用') + '</div>';
+      // 只有思考内容（思考型模型在探测小预算下的常见形态）：账号可用，但要说明
+      // 「没有正文 ≠ 没测通」，否则用户以为测试没跑成。
+      else if (res.note) body = '<div class="pf-reply">' + esc(res.note) + '</div>';
     } else if (res && res.ok === null) {
       verdict = '<span class="tag">无法判断</span>';
       body = '<div class="pf-err">' + esc(res.error || '探测无明确结论（网络/限流等），稍后再试') + '</div>';
