@@ -59,6 +59,10 @@
     "blackcat_enabled": true,
     "growth_enabled": true,
     "growth_concurrency": 1,
+    "task_mode": "roi",
+    "task_min_net_credit": 0,
+    "task_daily_credit_budget": 0,
+    "task_unit_chat_cost": 30,
     "jitter_minutes": 0,
     "account_spread_minutes": 0,
     "account_spread_min_gap_seconds": 0,
@@ -75,7 +79,9 @@
     "billing_base": ""
   },
   "cn": {
-    "chat_base": ""
+    "chat_base": "",
+    "billing_base": "",
+    "web_base": ""
   },
   "upstream": {
     "timeout_seconds": 120,

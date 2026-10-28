@@ -181,6 +181,25 @@ type Config struct {
 		// 不会全部账号都在夜里有活动。夜猫子是唯一「整任务都是真实模型对话」的
 		// 任务，指纹最重，故只收窄它；白天任务（签到/旅行/成长）仍全池保号。
 		NightAccountCap int `json:"night_account_cap"` // 缺省 0（不限）；>0 = Top-N 按积分
+
+		// 成长任务积分效益（ROI）策略。背景：满量跑完 autoActions 的 30 项任务
+		// 里有约 19 次真实模型对话，单号一天净消耗 520–666 积分（10-27 事故复盘），
+		// 而真正白拿积分的只有零成本遥测类任务与补领清扫。所以默认改成「零成本
+		// 任务全做、计费任务按实测 ROI 与预算做」，而不是无脑全跑。
+		//
+		// TaskMode: all = 旧行为全量执行；free = 只做零成本任务；roi = 按净收益
+		// 与预算闸门决定（缺省）。空/非法 → roi。
+		TaskMode string `json:"task_mode"`
+		// TaskMinNetCredit 只约束计费动作：预估净收益（奖励 − 成本）达到该值才做。
+		// <=0 = 只要有正收益就做（缺省）。
+		TaskMinNetCredit int64 `json:"task_min_net_credit"`
+		// TaskDailyCreditBudget 单账号每日计费积分预算，0 = 不限（缺省）。超出后
+		// 本日剩余计费任务全部跳过（零成本任务不受影响）。
+		TaskDailyCreditBudget int64 `json:"task_daily_credit_budget"`
+		// TaskUnitChatCost 单次真实对话的兜底成本（积分），用于还没测到样本的
+		// 任务；<=0 → 内置默认 30。实测账本 data/task-credit-ledger.json 有样本时
+		// 优先用实测均值。
+		TaskUnitChatCost int64 `json:"task_unit_chat_cost"`
 	} `json:"schedule"`
 
 	Global struct {
@@ -208,6 +227,13 @@ type Config struct {
 		// 备选入口 copilot.tencent.com 对海外出口（如 Clash 全局 + TUN）的 TLS 握手
 		// 直接复位，CN 模型目录与对话全部 EOF；需要时用它填这个键回落。
 		ChatBase string `json:"chat_base"`
+		// BillingBase 国内版计费域 base 覆盖（余额 get-user-resource、签到等）；空 =
+		// 回落内置默认。与 chat_base 一起填可把整个 CN 域指向同一自建/自测入口
+		// （私有代理、本地模拟上游；积分效益的实测成本账本依赖余额查询）。
+		BillingBase string `json:"billing_base"`
+		// WebBase 国内版官网域（任务领奖 /activity/... 类接口）覆盖；空 = 回落内置
+		// 默认 https://www.workbuddy.cn。
+		WebBase string `json:"web_base"`
 	} `json:"cn"`
 
 	Upstream struct {
@@ -522,6 +548,10 @@ func Default() *Config {
 	c.Schedule.BalanceRefreshMinutes = 5
 	c.Schedule.TaskSweepEnabled = true
 	c.Schedule.TaskSweepMinutes = 15
+	// 成长任务缺省按 ROI 执行（零成本全做、计费项看净收益与预算），而不是全量跑：
+	// 全量跑每号每天净亏 520–666 积分（10-27 事故复盘），roi 是目前唯一不亏的档。
+	c.Schedule.TaskMode = "roi"
+	c.Schedule.TaskUnitChatCost = 30
 	c.Upstream.TimeoutSeconds = 120
 	// HeaderTimeoutSeconds/IdleTimeoutSeconds 默认 0（未设置态），回落见 normalize()。
 	c.Upstream.HeaderTimeoutSeconds = 0
@@ -1178,6 +1208,24 @@ func (c *Config) normalize() error {
 	}
 	if c.Schedule.NightAccountCap < 0 {
 		return fmt.Errorf("schedule.night_account_cap: %d 非法（0 = 不限，>0 = Top-N）", c.Schedule.NightAccountCap)
+	}
+	// 成长任务积分效益策略：空/非法一律回落 roi（老 config 没有这些键，不能报错）。
+	switch strings.ToLower(strings.TrimSpace(c.Schedule.TaskMode)) {
+	case "", "roi":
+		c.Schedule.TaskMode = "roi"
+	case "all", "free":
+		c.Schedule.TaskMode = strings.ToLower(strings.TrimSpace(c.Schedule.TaskMode))
+	default:
+		return fmt.Errorf("schedule.task_mode: %q 非法（all / free / roi）", c.Schedule.TaskMode)
+	}
+	if c.Schedule.TaskMinNetCredit < 0 {
+		return fmt.Errorf("schedule.task_min_net_credit: %d 不得为负；0 = 有正收益就做", c.Schedule.TaskMinNetCredit)
+	}
+	if c.Schedule.TaskDailyCreditBudget < 0 {
+		return fmt.Errorf("schedule.task_daily_credit_budget: %d 不得为负；0 = 不限", c.Schedule.TaskDailyCreditBudget)
+	}
+	if c.Schedule.TaskUnitChatCost < 0 {
+		return fmt.Errorf("schedule.task_unit_chat_cost: %d 不得为负；0 = 内置默认 30", c.Schedule.TaskUnitChatCost)
 	}
 	if err := c.validateScheduleHours(); err != nil {
 		return err
