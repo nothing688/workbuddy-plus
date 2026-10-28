@@ -360,8 +360,9 @@ func TestAccountProbeChatSuccess(t *testing.T) {
 	if body["model"] != "hy3" {
 		t.Fatalf("出站 model=%v, 必须是裸名 hy3（前端传的是 cn:hy3）", body["model"])
 	}
-	if mt, ok := body["max_tokens"].(float64); !ok || mt != 16 {
-		t.Fatalf("出站 max_tokens=%v, want 16", body["max_tokens"])
+	// 64 而不是 16：思考型模型会把预算先花在 reasoning 上，16 token 时正文恒空。
+	if mt, ok := body["max_tokens"].(float64); !ok || mt != 64 {
+		t.Fatalf("出站 max_tokens=%v, want 64", body["max_tokens"])
 	}
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) != 1 {
@@ -769,5 +770,50 @@ func TestAccountProbeChatFallsBackOnModelRejection(t *testing.T) {
 	// 模型级拒绝不是账号故障：不得禁用/冷却/记错误。
 	if st, _ := pl.Status("u1"); st.Disabled || st.Cooling || st.ErrTotal != 0 {
 		t.Fatalf("模型级失败改了池状态：%+v", st)
+	}
+}
+
+// TestAccountProbeChatEmptyContentIsInconclusive 上游回包只有思考、没有正文时
+// （思考型模型把探测预算吃满），探测必须返回「无结论」而不是「不可用」：
+//   - ok = null（前端据此显示「无法判断」，且不从顶部可用计数里扣）
+//   - 不动池状态（尤其不能禁用）
+func TestAccountProbeChatEmptyContentIsInconclusive(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				// 只有 reasoning_content，没有 content：与思考型模型在 16~64 token 预算下的回包同形。
+				return probeSSEResponse(
+					"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"hy3\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"思考中……\"}}]}\n\n" +
+						"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"hy3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+						"data: [DONE]\n\n"), nil
+			}
+			return probeJSONResponse(500, `{"code":500,"msg":"no models"}`), nil
+		})},
+		ChatBaseCN:    "https://cn.example",
+		BillingBaseCN: "https://cn.example",
+	}
+	pl := newAccountMetaPool(t)
+	pn := New(Config{Version: "test", APIKey: "test-key", Pool: pl, Upstream: up})
+
+	rec := doAccountMetaRequest(t, pn, "POST", "/panel/api/accounts/u1/probe_chat", `{"model":"cn:hy3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK           bool   `json:"ok"`
+		Inconclusive bool   `json:"inconclusive"`
+		Error        string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("空正文不该返回 ok=true")
+	}
+	if !resp.Inconclusive || resp.Error == "" {
+		t.Fatalf("应返回 inconclusive + error，实际 %+v", resp)
+	}
+	if st, ok := pl.Status("u1"); !ok || st.Disabled {
+		t.Fatalf("空正文不该禁用账号：%+v", st)
 	}
 }

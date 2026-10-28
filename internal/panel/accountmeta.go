@@ -238,11 +238,13 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 		bare := candidates[i]
 		resp["model"] = realm + ":" + bare
 		// 非流式语义的请求体（上游 prepareBody 会强制 stream:true，回包仍是 SSE，
-		// 下面按两种形态都能解析）。max_tokens 压到 16：只要一句回复即可判定可用。
+		// 下面按两种形态都能解析）。max_tokens 给 64 而不是最初的 16：思考型模型
+		// （hy3 等默认开思考，且多数不支持 thinking:disabled）会先把预算花在
+		// reasoning 上，16 token 时正文恒为 0 字节 → 被误判成「上游没回内容」。
 		body, err := json.Marshal(map[string]any{
 			"model":      bare,
 			"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-			"max_tokens": 16,
+			"max_tokens": 64,
 			"stream":     false,
 		})
 		if err != nil {
@@ -330,8 +332,13 @@ func (p *Panel) accountProbeChat(w http.ResponseWriter, r *http.Request) {
 		}
 		reply, perr := probeReplyText(raw)
 		if perr != nil {
-			resp["error"] = perr.Error()
-			log.Printf("panel: probe_chat uid=%s model=%s 解析失败: %v", uid, bare, perr)
+			// 空正文 ≠ 账号不可用：最常见的是思考型模型把探测预算吃光（正文 0 字节），
+			// 也可能是内容过滤。按「无结论」返回（ok=null），面板据此显示「无法判断」
+			// 而不是「测试不可用」——后者会把它从顶部可用计数里扣掉，是误判。
+			resp["ok"] = nil
+			resp["inconclusive"] = true
+			resp["error"] = perr.Error() + "（未判定为不可用：可能是思考型模型把探测预算占满，稍后重试或指定模型）"
+			log.Printf("panel: probe_chat uid=%s model=%s 无正文（无结论）: %v", uid, bare, perr)
 			break
 		}
 		resp["ok"] = true
