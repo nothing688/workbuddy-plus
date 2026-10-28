@@ -1687,6 +1687,18 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 		log.Printf("WARN: [upstream] fetch models: enterprise endpoint failed (v3/config only): %v", enterprise.err)
 	}
 	out := mergeModelInfos(v3.infos, enterprise.infos)
+	// 账号级裁剪（2026-10-28）：/console/enterprises/personal/models 的
+	// agents[cli].models 才是「这个账号真实可用」的清单；/v3/config 是平台全量
+	// 路由表——里面还有别家云厂商的路由别名（如 deepseek-v3-1-volc）、未授权模型
+	// 与试用横幅，调了只会回 11102 service info not found。
+	// 两路都成功时按账号清单裁剪「对话模型」；媒体生成模型（出图/出视频）不在
+	// 账号清单里，继续保留，否则面板与 /v1/models 的出图条目会整块消失。
+	// 裁剪后为空说明账号清单口径异常，退回未裁剪结果（宁可多列，不能空表）。
+	if enterprise.err == nil && len(enterprise.infos) > 0 {
+		if restricted := restrictChatToAccountModels(out, enterprise.infos); len(restricted) > 0 {
+			out = restricted
+		}
+	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("models api returned empty list")
 	}
@@ -2841,4 +2853,27 @@ func IsAlreadyCheckin(err error) bool {
 
 func truncate(s string, n int) string {
 	return logfmt.Truncate(s, n)
+}
+
+// restrictChatToAccountModels 把平台目录裁到「账号真实可用」的对话模型。
+//
+// account 来自 /console/enterprises/personal/models 的 agents[cli].models（已剔除
+// disabled 与非对话条目）；all 是 v3/config 的平台全量目录。规则：
+//   - 媒体生成模型（GenerationKind 非空）无条件保留：账号清单只列对话模型，
+//     按清单裁剪会把出图/出视频整类抹掉；
+//   - 其余模型必须在 account 清单里。
+func restrictChatToAccountModels(all, account []ModelInfo) []ModelInfo {
+	allowed := make(map[string]bool, len(account))
+	for _, mi := range account {
+		if mi.ID != "" {
+			allowed[mi.ID] = true
+		}
+	}
+	out := make([]ModelInfo, 0, len(all))
+	for _, mi := range all {
+		if mi.GenerationKind != "" || allowed[mi.ID] {
+			out = append(out, mi)
+		}
+	}
+	return out
 }

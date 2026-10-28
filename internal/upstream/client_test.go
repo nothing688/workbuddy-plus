@@ -866,3 +866,36 @@ func TestIsModelBusy(t *testing.T) {
 		}
 	}
 }
+
+// TestRestrictChatToAccountModels 账号级裁剪：平台目录里账号没有的对话模型
+// （如 deepseek-v3-1-volc 这类别家云厂商路由）必须剔除，否则面板会列一堆
+// 调不通、验证必 11102 的模型；媒体生成模型不在账号清单里，无条件保留。
+func TestRestrictChatToAccountModels(t *testing.T) {
+	all := []ModelInfo{
+		{ID: "hy3"},
+		{ID: "glm-5.2"},
+		{ID: "deepseek-v3-1-volc"},           // 平台路由别名，账号未授权
+		{ID: "hy-image-3.5", GenerationKind: "image"}, // 媒体模型：账号清单不含
+	}
+	account := []ModelInfo{{ID: "hy3"}, {ID: "glm-5.2"}}
+
+	got := restrictChatToAccountModels(all, account)
+	ids := make(map[string]bool, len(got))
+	for _, mi := range got {
+		ids[mi.ID] = true
+	}
+	if !ids["hy3"] || !ids["glm-5.2"] {
+		t.Fatalf("账号清单内的模型被误删：%+v", got)
+	}
+	if ids["deepseek-v3-1-volc"] {
+		t.Fatalf("账号清单外的对话模型应被剔除：%+v", got)
+	}
+	if !ids["hy-image-3.5"] {
+		t.Fatalf("媒体生成模型应保留：%+v", got)
+	}
+
+	// 账号清单为空（端点上没给 agents[cli] 时）→ 只剩媒体模型，由调用方决定是否采用。
+	if only := restrictChatToAccountModels(all, nil); len(only) != 1 || only[0].ID != "hy-image-3.5" {
+		t.Fatalf("空账号清单时只应保留媒体模型：%+v", only)
+	}
+}
