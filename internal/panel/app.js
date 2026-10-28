@@ -3324,7 +3324,7 @@ $('importFile').onchange = async () => {
     // 分组可空：留空即「未分组」；后端按导入批次统一打标，导入后再逐号改也不冲突。
     if (importGroup) fd.append('group', importGroup);
     // 批量迁移默认允许跳过逐号上游调用，避免导入 100 个号时串行签到/查余额。
-    if ($('importSkipTasks') && $('importSkipTasks').checked) fd.append('skip_tasks', '1');
+    if ($('importSkipGrowth') && $('importSkipGrowth').checked) fd.append('skip_growth_tasks', '1');
     try {
       const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
       const d = await r.json().catch(() => ({}));

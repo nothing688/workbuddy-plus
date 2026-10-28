@@ -7,6 +7,7 @@ package panel
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -33,6 +34,18 @@ type importTestEnv struct {
 
 // newImportTestEnv 装配最小可用的面板：池在临时目录、上游全部指向无害信封
 // （导入后的签到/激活/余额查询失败只记日志，不影响导入结果）。
+// taskJobOf 读作业表里某账号的作业（作业表由 StartTaskJobs 创建）。
+func (e *importTestEnv) taskJobOf(uid string) (TaskJob, bool) {
+	m := e.panel.getTaskJobManager()
+	if m == nil {
+		return TaskJob{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[uid]
+	return j, ok
+}
+
 func newImportTestEnv(t *testing.T) *importTestEnv {
 	t.Helper()
 	authDir := filepath.Join(t.TempDir(), "auths")
@@ -445,31 +458,43 @@ func TestImportExportedTwoAccounts(t *testing.T) {
 	e.account(t, "2")
 }
 
-// TestImportSkipTasksSkipsUpstream skip_tasks=1 时导入只落盘/进池，不再逐号
-// 签到、查余额或启动后台任务（批量迁移的耗时与上游压力主要来自这里）。
-func TestImportSkipTasksSkipsUpstream(t *testing.T) {
+// TestImportSkipGrowthKeepsCheckin 勾选「跳过成长任务」时：
+//   - 签到 / 余额查询照常执行（回血与可用性观测，跳过等于让新号白等一天）；
+//   - 只有「新账号自动跑成长任务」被跳过（那是唯一会为点亮判据发真实对话的一步）。
+func TestImportSkipGrowthKeepsCheckin(t *testing.T) {
 	e := newImportTestEnv(t)
+	e.panel.cfg.AutoTasksEnabled = func() bool { return true }
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := e.panel.StartTaskJobs(ctx, filepath.Join(t.TempDir(), "task-jobs.json")); err != nil {
+		t.Fatal(err)
+	}
+	// 作业是异步跑的：先停掉再让 t.TempDir 清理，否则收尾写盘会撞上目录已删。
+	t.Cleanup(func() { e.panel.getTaskJobManager().stop() })
+
 	code, resp := e.importRawForm(t,
 		`[{"uid":"skip1","access_token":"at-skip1","refresh_token":"rt-skip1","expires_at":1893456000}]`,
-		map[string]string{"skip_tasks": "1"})
+		map[string]string{"skip_growth_tasks": "1"})
 	if code != http.StatusOK || resp.Imported != 1 {
-		t.Fatalf("skip import code=%d resp=%+v", code, resp)
-	}
-	if n := e.upCalls.Load(); n != 0 {
-		t.Fatalf("skip_tasks 仍发了 %d 次上游请求", n)
+		t.Fatalf("import code=%d resp=%+v", code, resp)
 	}
 	if _, ok := e.pool.Status("skip1"); !ok {
 		t.Fatal("skip1 未进池")
 	}
+	if n := e.upCalls.Load(); n == 0 {
+		t.Fatal("勾选「跳过成长任务」后仍应签到 + 查余额（这一步不该被跳过）")
+	}
+	if _, ok := e.taskJobOf("skip1"); ok {
+		t.Fatal("勾选后不该启动新账号成长任务")
+	}
 
-	// 不跳过时保持旧行为：至少会打签到 / 余额接口。
-	normal := newImportTestEnv(t)
-	code, resp = normal.importRaw(t,
-		`[{"uid":"skip2","access_token":"at-skip2","refresh_token":"rt-skip2","expires_at":1893456000}]`)
+	// 不勾选时照旧启动成长任务作业（同一套环境，只有这一个变量不同）。
+	code, resp = e.importRawForm(t,
+		`[{"uid":"run1","access_token":"at-run1","refresh_token":"rt-run1","expires_at":1893456000}]`, nil)
 	if code != http.StatusOK || resp.Imported != 1 {
 		t.Fatalf("normal import code=%d resp=%+v", code, resp)
 	}
-	if normal.upCalls.Load() == 0 {
-		t.Fatal("未勾选 skip_tasks 时应照常打上游签到/余额")
+	if _, ok := e.taskJobOf("run1"); !ok {
+		t.Fatal("未勾选时应启动新账号成长任务")
 	}
 }

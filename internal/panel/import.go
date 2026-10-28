@@ -64,9 +64,10 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	}
 	// group 可选：本次导入成功的账号统一归到该组（空 = 不动已有分组）。
 	group := strings.TrimSpace(r.FormValue("group"))
-	// skip_tasks 可选：批量迁移时跳过逐号签到 / 余额查询 / 新账号后台任务。
-	// 这些调用原本同步串行，100 个号导入会把请求拖到几十秒并打满上游。
-	skipTasks := isTruthyForm(r.FormValue("skip_tasks"))
+	// skip_growth_tasks 可选：只跳过「新账号自动跑成长任务」（任务中心），
+	// 签到 / 余额查询 / 国际版注册激活照常——它们是回血与可用性观测，
+	// 跳过等于让刚导入的号白等一天。旧字段名 skip_tasks 保留兼容（历史脚本）。
+	skipGrowth := isTruthyForm(r.FormValue("skip_growth_tasks")) || isTruthyForm(r.FormValue("skip_tasks"))
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "missing file field: "+err.Error())
@@ -195,11 +196,8 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
-		// skip_tasks 时整段跳过：导入只负责落盘 + 进池，不产生任何上游请求。
-		if skipTasks {
-			imported++
-			continue
-		}
+		// 这几步与「成长任务」无关：签到是回血、余额是可用性观测，批量导入也要跑
+		// （只受 schedule.* 开关影响，不受本参数的 skip 影响）。
 		if realm == "global" {
 			if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
 				log.Printf("panel: import global 注册激活 uid=%s: %v", uid, err)
@@ -220,7 +218,9 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 			p.cfg.Pool.ReenableIfCredits(uid, rm, tt)
 		}
 
-		if isNewAccount {
+		// 只有「新账号自动跑成长任务」受 skip_growth_tasks 控制：它是唯一会为了
+		// 点亮判据而发真实对话的一步。
+		if isNewAccount && !skipGrowth {
 			p.StartNewAccountTasks(uid)
 		}
 		imported++
@@ -235,7 +235,8 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		"skipped":    skipped,
 		"errors":     errs,
 		"group":      group,
-		"skip_tasks": skipTasks,
+		"skip_growth_tasks": skipGrowth,
+		"skip_tasks":        skipGrowth, // 兼容旧前端/脚本的字段名
 	})
 }
 

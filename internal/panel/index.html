@@ -2713,8 +2713,8 @@ input::placeholder { color: var(--ink-3); }
         <div class="hint" style="margin-bottom:8px">可一次选多个 JSON 文件，每个文件可以是：账号数组、单个账号对象、<code>{"accounts":[...]}</code> / <code>{"data":{"accounts":[...]}}</code> 包裹、JSONL（每行一个账号）或 access_token 字符串数组。必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选；兼容 <code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等别名，过期时间戳秒或毫秒均可。</div>
         <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
         <datalist id="metaGroupList"></datalist>
-        <label class="sel-note" style="margin:0 0 8px" title="批量迁移建议勾选：导入后不再对每个号签到、查余额或启动新账号任务">
-          <input type="checkbox" id="importSkipTasks"> 跳过导入后的签到 / 余额 / 后台任务
+        <label class="sel-note" style="margin:0 0 8px" title="只跳过「新账号自动跑成长任务」（任务中心，会为点亮判据发真实对话）。导入时的签到、余额查询以及日常保活 / 签到排程都照常，不会漏">
+          <input type="checkbox" id="importSkipGrowth"> 跳过导入后的成长任务（签到 / 余额 / 保活照常）
         </label>
         <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
         <div id="importDone" class="state ok" hidden></div>
