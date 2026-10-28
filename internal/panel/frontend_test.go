@@ -2289,3 +2289,42 @@ func TestAccountTableSortHeaders(t *testing.T) {
 		t.Fatal("找不到账号表 accTable")
 	}
 }
+
+// TestAppJSCleanNameStripsBlankPadding 钉住账号名的显示清洗：空白填充符（U+3164 等）
+// 视觉是空白但属于「字母」，trim() 删不掉——线上出现过昵称前面带 6 个 U+3164，
+// 名字被顶到行尾、看起来像没对齐。方向控制符同理（整行按 RTL 排版）。
+func TestAppJSCleanNameStripsBlankPadding(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; cleanName test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function cleanName(');
+assert.ok(start >= 0, 'cleanName not found');
+const end = src.indexOf('\n}', start) + 2;
+const ctx = { String };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.cleanName = cleanName;', ctx);
+const U3164 = '\u3164';
+// 线上原始昵称：6 个韩文填充符 + 空格 + 名字
+assert.strictEqual(ctx.cleanName(U3164.repeat(6) + ' 怎样共勉'), '怎样共勉');
+// 方向控制符（RLM）与零宽空格
+assert.strictEqual(ctx.cleanName('\u200f怎样共勉'), '怎样共勉');
+assert.strictEqual(ctx.cleanName('\u200b 怎样共勉 \u200b'), '怎样共勉');
+// 盲文空白与韩文字母填充
+assert.strictEqual(ctx.cleanName('\u2800\u115f怎样共勉'), '怎样共勉');
+// 正常名字、空值不改语义
+assert.strictEqual(ctx.cleanName('怎样共勉'), '怎样共勉');
+assert.strictEqual(ctx.cleanName(null), '');
+console.log('cleanName passed');`
+	path := filepath.Join(t.TempDir(), "cleanname.cjs")
+	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, path, "app.js").CombinedOutput(); err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+}
