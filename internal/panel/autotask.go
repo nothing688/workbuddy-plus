@@ -45,6 +45,15 @@ type autoAction struct {
 	TaskCode string // 目标任务 code
 	Desc     string // 展示用说明
 	Attempt  bool   // true = 尝试型（上游未证实可脚本化，跑了可能不点亮）
+	// Chats 该动作内发起的**真实模型对话**次数（0 = 零成本动作）。
+	//
+	// 为什么要显式标注：成长任务的奖励是几十到几百分，而点亮任务要花真实对话积分
+	// （glm-5.2 / fast-model 单次约 27–35 分，见 taskroi.go 的 defaultUnitChatCost
+	// 推导）。只有把"这个动作要发几次真实对话"标出来，才能算净收益、才能在
+	// free/roi 模式下跳过不合算的动作——这是 2026-10-27 单号一天净亏 520–666 分
+	// 的直接修复点。纯遥测上报（ReportChatActivity / ReportDesktopEvent / ReportWebEvent）
+	// 不产生计费请求，一律 0。
+	Chats int
 	// ClaimOnly 只领奖不做动作（issue #174）：白名单外的任务达标后没人领，积分就永久卡住。
 	// 执行器看到 progress 已达标直接 claim；未达标则跳过（"没有可执行的自动动作"），
 	// 不消耗对话配额、不发任何上游动作请求。
@@ -65,9 +74,12 @@ type autoTaskOutcome struct {
 	Claimed        bool
 	Credit         int64
 	Energy         int64
-	ClaimError     string
-	Attempt        bool
-	ActionRun      bool
+	// Cost 本动作实测花掉的积分（计费动作 run 前后余额差值；0 = 未测或零成本）。
+	// 与 Credit 一起给出「这一项到底赚了还是亏了」，也是 taskroi.go 账本样本的来源。
+	Cost       int64
+	ClaimError string
+	Attempt    bool
+	ActionRun  bool
 }
 
 // autoActions 已实现的任务动作表（顺序即执行顺序：先解锁依赖项）。
@@ -86,6 +98,7 @@ var autoActions = []autoAction{
 	{
 		TaskCode: "Model_chat_GLM5.2",
 		Desc:     "接受任务 → glm-5.2 真实对话一次 → 对齐模型上报",
+		Chats:    1,
 		run:      runModelChat,
 	},
 	{
@@ -131,11 +144,13 @@ var autoActions = []autoAction{
 	{
 		TaskCode: "expert_5",
 		Desc:     "真实专家召唤+使用链 ×5（专家市场列表+真实 chat，已验证：三账号点亮）",
+		Chats:    5,
 		run:      runExpertUse,
 	},
 	{
 		TaskCode: "Expert_team_use_3",
 		Desc:     "真实专家团召唤+使用链 ×3（已验证：三账号点亮）",
+		Chats:    3,
 		run:      runExpertTeamUse,
 	},
 	{
@@ -146,43 +161,53 @@ var autoActions = []autoAction{
 	{
 		TaskCode: "skill_1",
 		Desc:     "真实对话 + skill_info 技能加载事件（已验证：人杰2 点亮）",
+		Chats:    1,
 		run:      runSkillFresh,
 	},
 	{
 		TaskCode: "Expert_lighthouse",
 		Desc:     "真实轻量云专家召唤+使用链（chat 链带 has_expert，已验证：两账号点亮）",
+		Chats:    1,
 		run:      runExpertLighthouse,
 	},
 	{
 		TaskCode: "WorkBuddy_Valorant",
 		Desc:     "无畏契约拼豆专家召唤+使用链（判据同 Expert_lighthouse；活动截止 2026-11-15）",
+		Chats:    1,
 		run:      runValorantExpert,
 	},
 	{
 		TaskCode: "expert_use_maidehao",
 		Desc:     "中国电商运营专家召唤+使用链（专家页搜索口径；活动截止 2026-11-20，+50c+5e）",
+		Chats:    1,
 		run:      runExpertExperienceFor("expert_use_maidehao"),
 	},
 	{
 		TaskCode: "expert_use_douyinyin",
 		Desc:     "抖音策略师召唤+使用链（专家页搜索口径；活动截止 2026-11-20，+50c+5e）",
+		Chats:    1,
 		run:      runExpertExperienceFor("expert_use_douyinyin"),
 	},
 	{
 		TaskCode: "expert_use_shangjia_xuanchuan",
 		Desc:     "商家宣传页与海报设计师召唤+使用链（专家页搜索口径；活动截止 2026-11-20，+50c+5e）",
+		Chats:    1,
 		run:      runExpertExperienceFor("expert_use_shangjia_xuanchuan"),
 	},
 	{
 		TaskCode: "expert_use_bowangwang",
 		Desc:     "直播电商教练召唤+使用链（专家页搜索口径；活动截止 2026-11-20，+50c+5e）",
+		Chats:    1,
 		run:      runExpertExperienceFor("expert_use_bowangwang"),
 	},
 	{
 		TaskCode: "black_cat",
 		Desc:     "夜猫子：23:00–08:00 窗口内 glm-5.2 对话补足（窗口外提示稍后再试）",
 		Attempt:  true,
-		run:      runBlackCat,
+		// Chats 取窗口内单轮补足上限（BlackcatNeed 实测 3）：最坏情况下要发 3 次
+		// 真实对话，ROI 核算按最坏情形定价，宁可少做也不亏。
+		Chats: 3,
+		run:   runBlackCat,
 	},
 	{
 		TaskCode: "school_season",
@@ -778,6 +803,10 @@ func (o autoTaskOutcome) resultMap(act *autoAction) map[string]any {
 		result["credit"] = o.Credit
 		result["energy"] = o.Energy
 	}
+	if o.Cost != 0 {
+		result["cost_credit"] = o.Cost
+		result["net_credit"] = o.Credit - o.Cost
+	}
 	if o.ClaimError != "" {
 		result["claim_error"] = o.ClaimError
 	}
@@ -866,8 +895,27 @@ func (p *Panel) executeAutoTaskMode(a *auth.Auth, act *autoAction, queued bool) 
 		out.Message = "该任务没有可执行的自动动作"
 		return out
 	}
+	// 计费动作实测成本：run 前后各读一次余额（UserResource 是免费只读接口，
+	// 不产生计费请求），差值即这一项真实花掉的积分，写进 taskroi.go 的账本
+	// 用于后续 ROI 定价与预算闸门。零成本动作（act.Chats == 0）不测，省两次上游往返。
+	costBefore := int64(-1)
+	if act.Chats > 0 && p.cfg.Upstream != nil {
+		if remain, _, rerr := p.cfg.Upstream.UserResource(a); rerr == nil {
+			costBefore = remain
+		}
+	}
 	message, err := act.run(p, a)
 	out.ActionRun = true
+	if costBefore >= 0 && p.cfg.Upstream != nil {
+		if remain, _, rerr := p.cfg.Upstream.UserResource(a); rerr == nil {
+			if spent := costBefore - remain; spent > 0 {
+				out.Cost = spent
+				p.recordTaskCost(a.UID, act.TaskCode, act.Chats, spent)
+				log.Printf("panel: task cost uid=%s code=%s chats=%d spent=%d credit",
+					a.UID, act.TaskCode, act.Chats, spent)
+			}
+		}
+	}
 	if err != nil {
 		out.Status = "error"
 		out.Message = "执行失败: " + err.Error()
@@ -1499,10 +1547,15 @@ func (p *Panel) runAutoAllObserved(ctx context.Context, a *auth.Auth, observe fu
 		return out
 	}
 
+	// 任务快照留存：阶段 0/0b 的列表结果同时是积分效益规划（taskroi.go）的输入，
+	// 规划不再额外打一次上游列表接口。
+	var tasksDefault, tasksMP []upstream.Task
+
 	// 阶段 0：批量接受尚未接受的任务（失败不阻塞——行为事件才是进度唯一判据）。
 	emit(autoTaskRunEvent{Kind: "phase", TaskCode: "(批量接受)"})
 	if ctx.Err() == nil {
 		if tasks, err := p.cfg.Upstream.ListTasks(a); err == nil && ctx.Err() == nil {
+			tasksDefault = tasks
 			codes := acceptPendingCodes(tasks)
 			if len(codes) > 0 && ctx.Err() == nil {
 				emit(autoTaskRunEvent{Kind: "phase", TaskCode: "(批量接受)"})
@@ -1534,6 +1587,7 @@ func (p *Panel) runAutoAllObserved(ctx context.Context, a *auth.Auth, observe fu
 		emit(autoTaskRunEvent{Kind: "phase", TaskCode: "(批量接受-mp)"})
 		if ctx.Err() == nil {
 			if mpTasks, err := p.cfg.Upstream.ListTasksMP(a); err == nil && ctx.Err() == nil {
+				tasksMP = mpTasks
 				mpCodes := acceptPendingCodes(mpTasks)
 				if len(mpCodes) > 0 && ctx.Err() == nil {
 					emit(autoTaskRunEvent{Kind: "phase", TaskCode: "(批量接受-mp)"})
@@ -1561,9 +1615,50 @@ func (p *Panel) runAutoAllObserved(ctx context.Context, a *auth.Auth, observe fu
 		}
 	}
 
+	// 积分效益规划（taskroi.go）：决定哪些任务值得花积分做、哪些只领奖、哪些跳过。
+	// 拿不到任务列表（上游临时故障）时不设闸门，按原样执行——规划缺数据不等于放弃任务。
+	roi := p.taskROI()
+	snapshot := taskSnapshotMap(tasksDefault, tasksMP)
+	decisions := map[string]taskPlanItem{}
+	gate := len(snapshot) > 0
+	if gate {
+		plan := buildTaskPlan(snapshot, autoActions, roi, func(code string, chats int) (int64, string) {
+			return p.taskCostOf(roi, code, chats)
+		}, p.spentToday(a.UID))
+		for _, item := range plan.Items {
+			decisions[item.TaskCode] = item
+		}
+		planResult := map[string]any{
+			"task_code": "(积分计划)", "status": "planned",
+			"message": plan.summary(), "plan": plan,
+		}
+		out = append(out, planResult)
+		emit(autoTaskRunEvent{Kind: "result", TaskCode: "(积分计划)", Result: planResult})
+		log.Printf("panel: task plan uid=%s %s", a.UID, plan.summary())
+	} else {
+		planResult := map[string]any{
+			"task_code": "(积分计划)", "status": "skipped",
+			"message": fmt.Sprintf("未取到任务列表，本轮按原样执行（模式 %s）", roi.Mode),
+		}
+		out = append(out, planResult)
+		emit(autoTaskRunEvent{Kind: "result", TaskCode: "(积分计划)", Result: planResult})
+	}
+
 	for _, act := range autoActions {
 		if ctx.Err() != nil {
 			break
+		}
+		if item, ok := decisions[act.TaskCode]; ok && item.Decision == decisionSkip {
+			// 策略性跳过：不发任何上游动作请求，但把「为什么不做」如实记进结果，
+			// 面板任务中心与 task-jobs.json 里都能看到判据。
+			result := map[string]any{
+				"ok": true, "status": "skipped_roi", "task_code": act.TaskCode, "desc": act.Desc,
+				"message": "积分效益策略跳过：" + item.Reason,
+				"chats":   item.Chats, "reward": item.Reward, "est_cost": item.EstCost, "net": item.Net,
+			}
+			out = append(out, result)
+			emit(autoTaskRunEvent{Kind: "result", TaskCode: act.TaskCode, Result: result, Completed: true})
+			continue
 		}
 		emit(autoTaskRunEvent{Kind: "task_start", TaskCode: act.TaskCode})
 		if ctx.Err() != nil {

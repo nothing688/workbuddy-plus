@@ -2123,6 +2123,23 @@ input::placeholder { color: var(--ink-3); }
             </div>
             <div class="hr"></div>
             <div class="grid2">
+              <label class="fld"><span class="lb">任务执行策略</span>
+                <input name="task_mode" placeholder="roi">
+                <span class="hint">roi（缺省）= 零成本任务全做，计费任务只在「奖励 − 实测成本」为正时做；free = 只做零成本任务；all = 旧行为，清单里的任务全部执行（实测每号每天净亏 520–666 分）。</span></label>
+              <div>
+                <label class="fld"><span class="lb">最小净收益（分）</span>
+                  <input name="task_min_net_credit" type="number" min="0" placeholder="0">
+                  <span class="hint">只约束计费任务：预估奖励减成本达到该值才执行。0 = 有正收益就做。</span></label>
+                <label class="fld"><span class="lb">每日计费预算（分/账号）</span>
+                  <input name="task_daily_credit_budget" type="number" min="0" placeholder="0">
+                  <span class="hint">0 = 不限。额度用完后当日剩余计费任务跳过，零成本任务照做。</span></label>
+                <label class="fld"><span class="lb">单次对话兜底成本（分）</span>
+                  <input name="task_unit_chat_cost" type="number" min="0" placeholder="30">
+                  <span class="hint">还没测到样本时按这个价估价；data/task-credit-ledger.json 有实测样本后自动改用实测均值。</span></label>
+              </div>
+            </div>
+            <div class="hr"></div>
+            <div class="grid2">
               <div class="switch"><span class="lb">后台刷新余额</span>
                 <input type="checkbox" name="balance_refresh_enabled"></div>
               <label class="fld"><span class="lb">刷新间隔（分钟）</span>

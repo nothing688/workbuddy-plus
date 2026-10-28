@@ -513,6 +513,14 @@ func main() {
 	// 面板「暂停任务」：成长队列 / 新号自动任务 / 夜猫子一起停，签到等回血任务照常。
 	sch.SetPausedFunc(pn.AccountTasksPaused)
 	pn.SetGrowthConcurrency(cfg.Schedule.GrowthConcurrency)
+	// 成长任务积分效益策略：缺省 roi（零成本全做 + 计费看净收益），装配期先落一次，
+	// 面板保存配置时再热更新（见 reloadConfig 里的同名调用）。
+	pn.SetTaskROI(panel.TaskROI{
+		Mode:              cfg.Schedule.TaskMode,
+		MinNetCredit:      cfg.Schedule.TaskMinNetCredit,
+		DailyCreditBudget: cfg.Schedule.TaskDailyCreditBudget,
+		UnitChatCost:      cfg.Schedule.TaskUnitChatCost,
+	})
 
 	var auditLog *server.AuditLog
 	if cfg.Admin.AuditEnabled {
@@ -896,6 +904,12 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	sch.SetNightAccountCap(newCfg.Schedule.NightAccountCap)
 	if pn != nil {
 		pn.SetGrowthConcurrency(newCfg.Schedule.GrowthConcurrency) // 排程轮次并发热生效
+		pn.SetTaskROI(panel.TaskROI{                               // 积分效益策略热生效
+			Mode:              newCfg.Schedule.TaskMode,
+			MinNetCredit:      newCfg.Schedule.TaskMinNetCredit,
+			DailyCreditBudget: newCfg.Schedule.TaskDailyCreditBudget,
+			UnitChatCost:      newCfg.Schedule.TaskUnitChatCost,
+		})
 	}
 	if gw != nil {
 		gw.SetBudgetLimit(newCfg.Budget.DailyCreditLimit)
@@ -910,6 +924,12 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 func applyCNChatBase(up *upstream.Client, cfg *Config) {
 	if cfg.CN.ChatBase != "" {
 		up.ChatBaseCN = cfg.CN.ChatBase
+	}
+	if cfg.CN.BillingBase != "" {
+		up.BillingBaseCN = cfg.CN.BillingBase
+	}
+	if cfg.CN.WebBase != "" {
+		up.WebBaseCN = cfg.CN.WebBase
 	}
 }
 
@@ -939,6 +959,8 @@ func restartRequiredFields(current, next *Config) []string {
 	changed("upstream.passthrough_ip", current.Upstream.PassthroughIP, next.Upstream.PassthroughIP)
 	// cn.chat_base 同样只在装配期写进 up.ChatBaseCN（请求路径并发读取，不做热改）。
 	changed("cn.chat_base", current.CN.ChatBase, next.CN.ChatBase)
+	changed("cn.billing_base", current.CN.BillingBase, next.CN.BillingBase)
+	changed("cn.web_base", current.CN.WebBase, next.CN.WebBase)
 	changed("global.enabled", current.Global.Enabled, next.Global.Enabled)
 	changed("global.chat_base", current.Global.ChatBase, next.Global.ChatBase)
 	changed("global.billing_base", current.Global.BillingBase, next.Global.BillingBase)

@@ -177,6 +177,11 @@ type Panel struct {
 	// growthConc 排程轮次的账号间并发（config schedule.growth_concurrency，热生效）。
 	// 0 = 未配置 → 1。
 	growthConc atomic.Int64
+	// roiMu/roi 成长任务积分效益设置（config schedule.task_*，热生效；见 taskroi.go）。
+	roiMu sync.Mutex
+	roi   TaskROI
+	// credit 任务实测成本账本（data/task-credit-ledger.json，懒加载）。
+	credit creditLedgerState
 	// notifier 排程轮次结束后的汇总通知出口（main 装配期注入 alerting webhook；
 	// nil = 只落面板日志）。装配期设定、运行期只读，不需要锁。
 	notifier func(string)
@@ -189,6 +194,21 @@ type Panel struct {
 // SetGrowthConcurrency 设置排程轮次的账号间并发（1-4；<=0 视为默认 1）。面板保存配置时热改。
 func (p *Panel) SetGrowthConcurrency(n int) {
 	p.growthConc.Store(int64(n))
+}
+
+// SetTaskROI 设置成长任务积分效益策略（panel 装配期与面板保存配置时调用，热生效）。
+// 传零值等价于「roi 模式 + 兜底单次对话成本」，即本仓库缺省行为。
+func (p *Panel) SetTaskROI(r TaskROI) {
+	p.roiMu.Lock()
+	p.roi = r.Normalize()
+	p.roiMu.Unlock()
+}
+
+// taskROI 取当前积分效益设置（未设置时为零值归一化结果：roi 模式）。
+func (p *Panel) taskROI() TaskROI {
+	p.roiMu.Lock()
+	defer p.roiMu.Unlock()
+	return p.roi.Normalize()
 }
 
 // SetNotifier 注入汇总通知出口（nil = 关闭推送，只写日志）。装配期调用。
@@ -339,6 +359,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim", p.withAuth(p.accountTaskClaim))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto", p.withAuth(p.accountTaskAuto))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto_all", p.withAuth(p.accountTaskAutoAll))
+	// 积分效益预览（taskroi.go）：按当前策略算出「跑哪些、跳过哪些、预估成本与收益」，
+	// 只读、不发任何行为请求。
+	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks/plan", p.withAuth(p.accountTaskPlan))
 	p.mux.HandleFunc("POST /panel/api/tasks/scan_all", p.withAuth(p.tasksScanAll))
 	p.mux.HandleFunc("POST /panel/api/tasks/run_queue", p.withAuth(p.tasksRunQueue))
 	p.mux.HandleFunc("GET /panel/api/tasks/queue", p.withAuth(p.tasksQueueStatus))
