@@ -201,3 +201,91 @@ func TestGroupBreakerDisabledGroupNotSpilled(t *testing.T) {
 		t.Fatalf("全禁用组不应改道，实际 acct=%+v from=%q", acct, from)
 	}
 }
+
+// TestGroupBreakerPrefersRicherGroup 组外改道按「分组积分总量」从多到少挑，
+// 未分组与「已禁用」组即使积分更高也不接单——它们不是可承接流量的分组。
+func TestGroupBreakerPrefersRicherGroup(t *testing.T) {
+	p := New("")
+	for _, a := range []*auth.Auth{
+		{UID: "a1", AccessToken: "at-a1", ExpiresAt: 9999999999},
+		{UID: "a2", AccessToken: "at-a2", ExpiresAt: 9999999999},
+		{UID: "b1", AccessToken: "at-b1", ExpiresAt: 9999999999},
+		{UID: "c1", AccessToken: "at-c1", ExpiresAt: 9999999999},
+		{UID: "free1", AccessToken: "at-free1", ExpiresAt: 9999999999},
+		{UID: "dead1", AccessToken: "at-dead1", ExpiresAt: 9999999999},
+	} {
+		p.Add(a)
+	}
+	for uid, group := range map[string]string{
+		"a1": "team-a", "a2": "team-a", "b1": "team-b", "c1": "team-c",
+		"free1": "", "dead1": DisabledGroup,
+	} {
+		if !p.SetMeta(uid, group, "") {
+			t.Fatalf("SetMeta %s failed", uid)
+		}
+	}
+	// 积分：未分组 9999、已禁用组 8888 都比两个具名组高——若被选中说明过滤没生效。
+	p.SetCredits("b1", 100, 100)
+	p.SetCredits("c1", 1000, 1000)
+	p.SetCredits("free1", 9999, 9999)
+	p.SetCredits("dead1", 8888, 8888)
+
+	// team-a 组内对该模型全冷却 → 触发改道。
+	reset := time.Now().Add(30 * time.Minute)
+	p.CooldownSoftForModel("a1", 600*time.Second, reset, "glm-5.2", "6004 model rate limit")
+	p.CooldownSoftForModel("a2", 600*time.Second, reset, "glm-5.2", "6004 model rate limit")
+
+	acct, from := p.PickExcludingForRealmGroupWithFailover(nil, "glm-5.2", "", "team-a")
+	if acct == nil || from != "team-a" {
+		t.Fatalf("改道结果 acct=%v from=%q，want 非空 + team-a", acct, from)
+	}
+	if acct.UID != "c1" {
+		t.Fatalf("改道选中 %q，want c1（具名分组里积分最多的 team-c）", acct.UID)
+	}
+}
+
+// TestGroupBreakerNeverRoutesIntoDisabledGroup 「已禁用」组不是流量出口：
+// 只剩它时可退回本组原逻辑，也不把请求塞进停放区。
+func TestGroupBreakerNeverRoutesIntoDisabledGroup(t *testing.T) {
+	p := New("")
+	for _, a := range []*auth.Auth{
+		{UID: "a1", AccessToken: "at-a1", ExpiresAt: 9999999999},
+		{UID: "dead1", AccessToken: "at-dead1", ExpiresAt: 9999999999},
+	} {
+		p.Add(a)
+	}
+	p.SetMeta("a1", "team-a", "")
+	p.SetMeta("dead1", DisabledGroup, "") // 未禁用，只是被人为放进了已禁用组
+	p.SetCredits("dead1", 5000, 5000)
+	reset := time.Now().Add(30 * time.Minute)
+	p.CooldownSoftForModel("a1", 600*time.Second, reset, "glm-5.2", "6004 model rate limit")
+
+	acct, from := p.PickExcludingForRealmGroupWithFailover(nil, "glm-5.2", "", "team-a")
+	if from != "team-a" {
+		t.Fatalf("from=%q，want team-a", from)
+	}
+	if acct != nil && acct.UID == "dead1" {
+		t.Fatal("不该把流量改道到「已禁用」组")
+	}
+}
+
+// TestGroupBreakerFallsBackToUngrouped 其余号都没分组时仍要能承接（否则改道变 503），
+// 但日志会说明是退路。
+func TestGroupBreakerFallsBackToUngrouped(t *testing.T) {
+	p := New("")
+	for _, a := range []*auth.Auth{
+		{UID: "a1", AccessToken: "at-a1", ExpiresAt: 9999999999},
+		{UID: "free1", AccessToken: "at-free1", ExpiresAt: 9999999999},
+	} {
+		p.Add(a)
+	}
+	p.SetMeta("a1", "team-a", "")
+	p.SetCredits("free1", 50, 50)
+	reset := time.Now().Add(30 * time.Minute)
+	p.CooldownSoftForModel("a1", 600*time.Second, reset, "glm-5.2", "6004 model rate limit")
+
+	acct, from := p.PickExcludingForRealmGroupWithFailover(nil, "glm-5.2", "", "team-a")
+	if acct == nil || acct.UID != "free1" || from != "team-a" {
+		t.Fatalf("acct=%v from=%q，want free1 + team-a", acct, from)
+	}
+}

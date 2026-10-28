@@ -90,8 +90,18 @@ func (p *Pool) PickExcludingForRealmGroupWithFailover(tried map[string]bool, req
 	total, usable, until, reason := p.groupModelStateLocked(group, reqModel, realm, now)
 	if total > 0 && usable == 0 {
 		p.openGroupBreakerLocked(group, reqModel, realm, total, until, reason, now)
-		// 组外正常选号（healthy 优先，其次组外最早解封兜底）。
-		if alt := p.pickLocked(tried, reqModel, realm, func(e *entry) bool { return e.group != group }); alt != nil {
+		// 组外改道：先按「分组的积分总量」从多到少挑具名分组，再在组内按常规选号。
+		// 只在有健康候选的组里挑（组内全冷时直接跳到下一组，不拿冷却号顶替）。
+		if alt := p.pickAcrossGroupsByCreditsLocked(tried, reqModel, realm, group); alt != nil {
+			return alt, group
+		}
+		// 退路：没有任何具名分组能承接（典型是其余号都没分组）时，允许未分组账号接单，
+		// 但**永不**改道到「已禁用」组——那是停放区，不是流量出口。
+		if alt := p.pickLocked(tried, reqModel, realm, func(e *entry) bool {
+			return e.group != group && e.group != DisabledGroup
+		}); alt != nil {
+			log.Printf("[pool] group breaker %s/%s/%s：没有具名分组可承接，改道未分组账号",
+				group, realm, reqModel)
 			return alt, group
 		}
 		// 组外也没有可用号（或都被本轮试完）：按本组原逻辑选号，保持旧语义。
@@ -235,4 +245,51 @@ func formatBreakerTime(t time.Time) string {
 		return "-"
 	}
 	return t.Format(time.RFC3339)
+}
+
+// pickAcrossGroupsByCreditsLocked 组外改道选号（须持锁）：把候选按分组聚合，
+// 按「组内可服务账号的积分总和」降序，逐个分组用常规选号逻辑挑一个。
+//
+// 为什么按分组而不是直接全池加权：分组是运维给账号划的归属，一个组整体积分多，
+// 说明它更耐烧；直接全池随机会让刚建的空组/低分组承担本该属于厚组的流量。
+// 排除两类「不是分组」的归属：空分组（未分组，没有运维归属）与 DisabledGroup
+// （停放区，禁用号即使被 include_disabled_in_tasks 放行也不该接业务流量）。
+// 同积分按组名排序，保证结果可复现（测试与线上排查都要确定性）。
+func (p *Pool) pickAcrossGroupsByCreditsLocked(tried map[string]bool, reqModel, realm, broken string) *auth.Auth {
+	now := time.Now()
+	sums := map[string]int64{}
+	for uid, e := range p.byUID {
+		if tried != nil && tried[uid] {
+			continue
+		}
+		if e.group == "" || e.group == broken || e.group == DisabledGroup {
+			continue
+		}
+		if realm != "" && e.a.Realm() != realm {
+			continue
+		}
+		if !p.selectable(e, now, reqModel) {
+			continue
+		}
+		sums[e.group] += e.credits
+	}
+	if len(sums) == 0 {
+		return nil
+	}
+	groups := make([]string, 0, len(sums))
+	for g := range sums {
+		groups = append(groups, g)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if sums[groups[i]] != sums[groups[j]] {
+			return sums[groups[i]] > sums[groups[j]]
+		}
+		return groups[i] < groups[j]
+	})
+	for _, g := range groups {
+		if a := p.pickLocked(tried, reqModel, realm, func(e *entry) bool { return e.group == g }); a != nil {
+			return a
+		}
+	}
+	return nil
 }

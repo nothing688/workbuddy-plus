@@ -742,8 +742,11 @@ function renderAccounts(list, filtered, probe) {
     const parked = !!s.group_parked && !!s.disabled;
     const prevGrp = String(s.prev_group == null ? '' : s.prev_group);
     const noteText = String(s.note == null ? '' : s.note);
-    // parked 时状态标签已经写了「已禁用」，分组徽章再写一遍是重复信息，直接不渲染。
-    const grpCell = parked ? ''
+    // parked（已移入「已禁用」组）的账号：状态标签只说明「已禁用」，分组归属就丢了。
+    // 这里补一个不可点击的红徽章显示**禁用前的分组**——禁用号不该看丢归属；
+    // 用 span 而不是 button，避免误点触发 movegroup 把书签清掉（那会让解冻后回错组）。
+    const grpCell = parked
+      ? '<span class="grp-badge parked" title="' + esc('已移入「已禁用」组；禁用前的分组：' + (prevGrp || '未分组') + '（解冻后自动回归）') + '">原 ' + esc(prevGrp || '未分组') + '</span>'
       : '<button class="grp-badge' + (grp ? '' : ' none') + '" data-a="movegroup" data-u="' + esc(s.uid) +
         '" title="' + esc(grp ? '分组：' + grp + '（点击移动到其他组）' : '未分组（点击入组）') + '">' + (grp ? esc(grp) : '未分组') + '</button>';
     const nickHtml = s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>';

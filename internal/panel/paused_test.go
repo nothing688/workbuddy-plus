@@ -154,6 +154,14 @@ assert.ok(!tb.innerHTML.includes('已暂停选号'), '正常行不该出现已�
 ctx.renderAccounts([Object.assign({}, base, { disabled: true, paused: false })]);
 assert.ok(tb.innerHTML.includes('已禁用'), '禁用行仍显示已禁用');
 assert.ok(!tb.innerHTML.includes('data-a="disable"'), '禁用行不再显示「禁用」按钮');
+
+// 已移入「已禁用」组的账号：分组徽章要显示**禁用前的分组**，且不可点击（点了会清书签）。
+ctx.renderAccounts([Object.assign({}, base, { disabled: true, group: '已禁用', group_parked: true, prev_group: '主力' })]);
+assert.ok(tb.innerHTML.includes('原 主力'), '停放号应显示禁用前分组: ' + tb.innerHTML);
+assert.ok(!tb.innerHTML.includes('data-a="movegroup"'), '停放号的分组徽章不该可点（避免清掉回归书签）');
+assert.ok(tb.innerHTML.includes('grp-badge parked'), '停放号徽章应走 parked 告警样式');
+ctx.renderAccounts([Object.assign({}, base, { disabled: true, group: '已禁用', group_parked: true, prev_group: '' })]);
+assert.ok(tb.innerHTML.includes('原 未分组'), '禁用前没有分组时应显示「原 未分组」: ' + tb.innerHTML);
 // 任务暂停（与「暂停选号」正交）：全局暂停时每行都标「任务暂停」且给「恢复任务」；
 // 未暂停时给「停任务」；单号名单命中只影响该行。
 ctx.tasksPausedAll = true;
