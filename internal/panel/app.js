@@ -3203,7 +3203,6 @@ function openAdd() {
   $('importFile').value = ''; $('importFile').disabled = false;
   $('importPaste').value = ''; $('importPaste').disabled = false;
   $('btnImportPaste').disabled = false;
-  if ($('importDrop')) $('importDrop').classList.remove('drag');
   $('importGroup').value = '';
   $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
@@ -3440,14 +3439,8 @@ if ($('btnImportPasteClear')) $('btnImportPasteClear').onclick = () => {
   $('importPaste').value = '';
   $('importPaste').focus();
 };
-// 拖放导入：整个「添加账号」对话框都是投放区（导入标签页打开时），不用对准虚线框。
-// 虚线框保留为可点击入口 —— 有人习惯点，有人习惯拖。
-const dz = $('importDrop');
-if (dz) {
-  dz.onclick = () => { if (!$('importFile').disabled) $('importFile').click(); };
-  dz.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dz.click(); } };
-}
-
+// 拖放导入：整个「添加账号」对话框都是投放区（导入标签页打开时），没有专门的框要点。
+// 光标落在任何位置都能接住文件，避免「先对准某个框」这一步。
 // 对话框级拖放：只在「导入 JSON」标签页激活时生效（其它标签页拖文件没有导入语义）。
 const addDlg = document.querySelector('#addVeil .dlg');
 const importTab = $('addTabImport');

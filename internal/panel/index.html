@@ -1152,17 +1152,6 @@ input:focus, select:focus, textarea:focus {
 }
 input::placeholder { color: var(--ink-3); }
 
-/* 导入拖放区：虚线框 + 悬停/拖入高亮，和文件选择按钮并存（两种习惯都照顾） */
-.dropzone {
-  border: 1px dashed var(--line); border-radius: 10px; padding: 14px 12px;
-  text-align: center; color: var(--ink-3); font-size: 12.5px; cursor: pointer;
-  transition: border-color .14s, background .14s, color .14s; margin-bottom: 8px;
-}
-.dropzone:hover { border-color: var(--accent); color: var(--accent); }
-.dropzone.drag { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-/* 对话框级拖放高亮：导入标签页整块发光，提示「放这儿就行」 */
-#addTabImport.drop-active { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); box-shadow: inset 0 0 0 2px var(--accent); border-radius: 10px; }
-
 /* ── 标签 / 徽章：统一胶囊与内描边 ─────────────────────────────── */
 .tag { padding: 2px 9px; font-weight: 550; letter-spacing: .01em; }
 .tag.ok { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 16%, transparent); }
@@ -2753,7 +2742,7 @@ input::placeholder { color: var(--ink-3); }
       </div>
       <!-- 导入 JSON -->
       <div id="addTabImport" class="tab-panel" hidden>
-        <div class="hint" style="margin-bottom:8px">可一次选多个 JSON 文件，每个文件可以是：账号数组、单个账号对象、<code>{"accounts":[...]}</code> / <code>{"data":{"accounts":[...]}}</code> 包裹、JSONL（每行一个账号）或 access_token 字符串数组。必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选；兼容 <code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等别名，过期时间戳秒或毫秒均可。</div>
+        <div class="hint" style="margin-bottom:8px">可一次选多个 JSON 文件，每个文件可以是：账号数组、单个账号对象、<code>{"accounts":[...]}</code> / <code>{"data":{"accounts":[...]}}</code> 包裹、JSONL（每行一个账号）或 access_token 字符串数组。必填 <code>uid</code> + <code>access_token</code>，<code>refresh_token</code> 可选；兼容 <code>id</code> / <code>token</code> / <code>refresh</code> / <code>name</code> / <code>expires_at</code> 等别名，过期时间戳秒或毫秒均可。文件也可以直接拖进本窗口任意位置。</div>
         <input type="text" id="importGroup" list="metaGroupList" placeholder="分组（可选，留空 = 未分组）" autocomplete="off" style="margin-bottom:8px">
         <datalist id="metaGroupList"></datalist>
         <label class="sel-note" style="margin:0 0 8px" title="只跳过「新账号自动跑成长任务」（任务中心，会为点亮判据发真实对话）。导入时的签到、余额查询以及日常保活 / 签到排程都照常，不会漏">
@@ -2766,8 +2755,6 @@ input::placeholder { color: var(--ink-3); }
           <button class="xs primary" id="btnImportPaste">导入粘贴内容</button>
           <button class="xs" id="btnImportPasteClear" title="清空上面的粘贴框">清空</button>
         </div>
-        <div id="importDrop" class="dropzone" role="button" tabindex="0"
-             title="整个对话框都可以接住拖进来的文件（可一次拖多个）；点这里等同选择文件">把文件拖到本窗口任意位置导入，或点此选择文件</div>
         <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
         <!-- 导入进度：按文件逐个 POST，每完成一个文件刷新一次（含已入池/跳过计数）。
              导入 30 个文件时它不是装饰——没有它整段过程只有一个「没反应」的对话框。 -->
