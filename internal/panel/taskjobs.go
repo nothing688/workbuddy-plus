@@ -31,6 +31,7 @@ var (
 	errTaskJobGlobal      = errors.New(globalTaskWriteMessage)
 	errTaskJobBusy        = errors.New("该账号有任务动作正在执行中，请等本轮结束后再试")
 	errTaskJobDisabled    = errors.New("自动成长任务未启用")
+	errTaskJobPaused      = errors.New("自动任务已暂停（面板「暂停任务」）")
 	errTaskJobLimit       = errors.New("后台任务记录已满，且当前没有可清理的已完成记录")
 )
 
@@ -194,6 +195,11 @@ func (p *Panel) StartAccountTaskJob(uid, trigger string) (TaskJob, bool, error) 
 	}
 	if trigger != "manual" && (p.cfg.AutoTasksEnabled == nil || !p.cfg.AutoTasksEnabled()) {
 		return TaskJob{}, false, errTaskJobDisabled
+	}
+	// 「暂停任务」只挡自动触发（daily / new_account）：手动启动是用户明确动作，照旧可用。
+	// 判据含全局 / 分组 / 单号三档（见 taskpause.go）。
+	if trigger != "manual" && p.AccountTasksPaused(uid) {
+		return TaskJob{}, false, errTaskJobPaused
 	}
 	if p.cfg.Pool == nil {
 		return TaskJob{}, false, errTaskJobAccount
@@ -484,7 +490,7 @@ func (m *taskJobManager) run(uid, jobID string, a *auth.Auth) {
 			stopReason = "账号凭证已更新，请重新启动后台任务"
 			cancelJob()
 		}
-	})
+	}, job.Trigger != "manual")
 	if stopReason != "" {
 		m.finish(uid, jobID, "interrupted", stopReason)
 	} else if jobCtx.Err() != nil {

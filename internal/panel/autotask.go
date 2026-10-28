@@ -789,9 +789,18 @@ func taskProgressReached(t *upstream.Task) bool {
 		t.AcceptStatus == "completed" || strings.EqualFold(t.Status, "complete"))
 }
 
-// executeAutoTask 统一执行任务：只在服务端确认进度达标后领奖，只有服务端确认已领
+// executeAutoTask 面板手动执行（单任务 / 一键完成）：不参与熔断。
+func (p *Panel) executeAutoTask(a *auth.Auth, act *autoAction) autoTaskOutcome {
+	return p.executeAutoTaskMode(a, act, false)
+}
+
+// executeAutoTaskMode 统一执行任务：只在服务端确认进度达标后领奖，只有服务端确认已领
 // 或领奖接口成功才返回 done。已达标未领取时先领奖，避免重复执行真实对话动作。
-func (p *Panel) executeAutoTask(a *auth.Auth, act *autoAction) (out autoTaskOutcome) {
+//
+// queued=true 表示由「自动队列/定时任务」发起：连续 maxStuckRuns 轮动作跑完却没
+// 点亮进度的任务会被 taskGuard 剔除（见 taskguard.go），避免每天白烧对话配额。
+// 面板手动单跑 / 一键完成传 false，永远不被熔断挡住。
+func (p *Panel) executeAutoTaskMode(a *auth.Auth, act *autoAction, queued bool) (out autoTaskOutcome) {
 	taskCode := "?"
 	uid := "?"
 	if act != nil {
@@ -844,6 +853,14 @@ func (p *Panel) executeAutoTask(a *auth.Auth, act *autoAction) (out autoTaskOutc
 	}
 	// ponytail: first_buddy 是例外——进度满只说明对话做过，奖励在 agreement +
 	// buddy/first 动作链里。按进度直接去领会永远领不到，所以进度满仍走领养。
+	//
+	// 熔断只看「要不要再跑动作」这一步：已达标的任务在上面直接领奖，不消耗对话，
+	// 永远不会被这里挡住。
+	if queued && p.taskGuard != nil && p.taskGuard.blocked(a.UID, act.TaskCode, out.ProgressBefore) {
+		out.Status = "skipped"
+		out.Message = fmt.Sprintf("连续 %d 轮动作已执行但服务端进度未点亮，已暂停自动重跑（手动执行或进度变化后自动恢复）", maxStuckRuns)
+		return out
+	}
 	if act.run == nil {
 		out.Status = "skipped"
 		out.Message = "该任务没有可执行的自动动作"
@@ -874,16 +891,25 @@ func (p *Panel) executeAutoTask(a *auth.Auth, act *autoAction) (out autoTaskOutc
 	out.ProgressAfter = taskProgressText(after)
 	out.Claimable = taskProgressReached(after)
 	if after.Claimed {
+		p.taskGuard.clear(a.UID, act.TaskCode)
 		out.Status = "done"
 		out.Claimed = true
 		out.Message = message + "；服务端已确认领取"
 		return out
 	}
 	if !out.Claimable {
+		// 动作真跑过，进度却没动：记一轮「无收益」。进度快照有变化（哪怕还没
+		// 达标，如 1/5 → 2/5）说明判据在计分，撤掉记录重新计数。
+		if out.ProgressAfter == out.ProgressBefore {
+			p.taskGuard.noteNoProgress(a.UID, act.TaskCode, out.ProgressAfter)
+		} else {
+			p.taskGuard.clear(a.UID, act.TaskCode)
+		}
 		out.Status = "awaiting_progress"
 		out.Message = message + "；服务端进度尚未达标，等待入账后再确认"
 		return out
 	}
+	p.taskGuard.clear(a.UID, act.TaskCode)
 	return p.claimAutoTask(a, act, message, before, after)
 }
 
@@ -1440,7 +1466,7 @@ func runExpertBatch(p *Panel, a *auth.Auth, expertType string, count int) (strin
 // 流程：先把所有未接受的任务批量 accept（规范状态机；上游脚本建议"先 accept"），
 // 再逐项执行行为链路。accept 不是进度产生的必要条件，但让后续状态流转规范。
 func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
-	return p.runAutoAllObserved(context.Background(), a, nil)
+	return p.runAutoAllObserved(context.Background(), a, nil, false)
 }
 
 type autoTaskRunEvent struct {
@@ -1452,7 +1478,8 @@ type autoTaskRunEvent struct {
 
 // runAutoAllObserved 对全量任务执行流程提供进度事件。ctx 在每个网络阶段、
 // 自动任务项开始前检查；已有上游调用本身保持原超时语义，取消后不再发起下一项。
-func (p *Panel) runAutoAllObserved(ctx context.Context, a *auth.Auth, observe func(autoTaskRunEvent)) []map[string]any {
+// queued=true（定时任务触发）时，逐项执行走熔断判据；面板手动触发传 false。
+func (p *Panel) runAutoAllObserved(ctx context.Context, a *auth.Auth, observe func(autoTaskRunEvent), queued bool) []map[string]any {
 	var out []map[string]any
 	if ctx == nil {
 		ctx = context.Background()
@@ -1542,7 +1569,7 @@ func (p *Panel) runAutoAllObserved(ctx context.Context, a *auth.Auth, observe fu
 		if ctx.Err() != nil {
 			break
 		}
-		outcome := p.executeAutoTask(a, &act)
+		outcome := p.executeAutoTaskMode(a, &act, queued)
 		result := outcome.resultMap(&act)
 		out = append(out, result)
 		emit(autoTaskRunEvent{Kind: "result", TaskCode: act.TaskCode, Result: result, Completed: true})

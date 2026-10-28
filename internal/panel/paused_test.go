@@ -135,6 +135,10 @@ const ctx = {
   // 状态列的原因行由 statusWhyHtml 生成（定义在抽取范围之外），本测试只关心
   // 暂停徽标/按钮，用空串占位即可。
   statusWhyHtml: () => '',
+  // 任务暂停三档状态（本轮新增）：默认全未暂停，下面单独喂 true 断言徽标与按钮。
+  tasksPausedAll: false,
+  pausedAccounts: new Set(),
+  pausedGroups: new Set(),
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.renderAccounts = renderAccounts;', ctx);
@@ -150,6 +154,23 @@ assert.ok(!tb.innerHTML.includes('已暂停选号'), '正常行不该出现已�
 ctx.renderAccounts([Object.assign({}, base, { disabled: true, paused: false })]);
 assert.ok(tb.innerHTML.includes('已禁用'), '禁用行仍显示已禁用');
 assert.ok(!tb.innerHTML.includes('data-a="disable"'), '禁用行不再显示「禁用」按钮');
+// 任务暂停（与「暂停选号」正交）：全局暂停时每行都标「任务暂停」且给「恢复任务」；
+// 未暂停时给「停任务」；单号名单命中只影响该行。
+ctx.tasksPausedAll = true;
+ctx.renderAccounts([base]);
+assert.ok(tb.innerHTML.includes('任务暂停'), '全局暂停时每行应有「任务暂停」标签: ' + tb.innerHTML);
+// 全局暂停时逐号开关没有意义：按钮禁用并指向任务中心的全局恢复。
+assert.ok(tb.innerHTML.includes('全局暂停'), '全局暂停时行内按钮应提示全局暂停: ' + tb.innerHTML);
+assert.ok(!tb.innerHTML.includes('data-a="taskresume"'), '全局暂停时不该给「恢复任务」按钮');
+assert.ok(!tb.innerHTML.includes('data-a="taskpause"'), '全局暂停时不该给「停任务」按钮');
+ctx.tasksPausedAll = false;
+ctx.renderAccounts([base]);
+assert.ok(tb.innerHTML.includes('data-a="taskpause"'), '未暂停时应给「停任务」按钮');
+assert.ok(!tb.innerHTML.includes('任务暂停'), '未暂停时不该出现「任务暂停」标签');
+ctx.pausedAccounts.add('u1');
+ctx.renderAccounts([base]);
+assert.ok(tb.innerHTML.includes('任务暂停') && tb.innerHTML.includes('data-a="taskresume"'),
+  '单号名单命中应只把该行标成任务暂停: ' + tb.innerHTML);
 console.log('account row paused render passed');`
 	path := filepath.Join(t.TempDir(), "accrow.cjs")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
@@ -264,6 +285,10 @@ const ctx = { Math, Object, Array, JSON, Number, String,
   api: async () => fake, $: () => inert, toast: () => {},
   renderAccounts: v => { accountsPainted = v; },
   renderModelLocks: v => { painted = v; },
+  // 任务暂停三档（本轮新增）：loadOverview 会同步这三个状态并刷新分组按钮，
+  // 它们定义在抽取范围之外，此处显式注入，否则整个函数会在 try 里静默中断。
+  tasksPausedAll: false, pausedAccounts: new Set(), pausedGroups: new Set(),
+  syncGroupTaskPauseBtn: () => {},
   overviewPath: () => 'overview' };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.loadOverview = loadOverview;', ctx);

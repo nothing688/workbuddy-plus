@@ -510,6 +510,8 @@ func main() {
 	// 成长任务队列排程的执行体在面板（队列逻辑唯一实现）：注入回调，避免 scheduler → panel 循环依赖。
 	sch.SetGrowthRunner(pn.RunGrowthQueueNow)
 	sch.SetSweepRunner(pn.RunTaskSweepNow)
+	// 面板「暂停任务」：成长队列 / 新号自动任务 / 夜猫子一起停，签到等回血任务照常。
+	sch.SetPausedFunc(pn.AccountTasksPaused)
 	pn.SetGrowthConcurrency(cfg.Schedule.GrowthConcurrency)
 
 	var auditLog *server.AuditLog

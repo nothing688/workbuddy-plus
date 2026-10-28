@@ -27,6 +27,21 @@ func blackcatEligible(st pool.Status) bool { return !st.Disabled && !st.Paused }
 // 只有 CI 恰好落在 UTC 夜里才真正执行。属典型的「随环境静默失效」的测试。
 var nowForNightWindow = time.Now
 
+// tasksPaused 读面板注入的暂停判据（未注入 = 从不暂停）。
+func (s *Scheduler) tasksPaused(uid string) bool {
+	s.schedMu.Lock()
+	fn := s.cfg.PausedFor
+	s.schedMu.Unlock()
+	return fn != nil && fn(uid)
+}
+
+// SetPausedFunc 装配期注入「任务暂停」判据（panel.AccountTasksPaused），可热改。
+func (s *Scheduler) SetPausedFunc(fn func(uid string) bool) {
+	s.schedMu.Lock()
+	s.cfg.PausedFor = fn
+	s.schedMu.Unlock()
+}
+
 // RunBlackcatNow 对所有可用账号执行夜猫子对话补足（窗口外跳过）。
 // 由 blackcat_hours 排程（默认 [23]）触发；执行前二次校验 InNightWindow。
 func (s *Scheduler) RunBlackcatNow() {
@@ -51,6 +66,12 @@ func (s *Scheduler) runBlackcat(ctx context.Context, spread bool) {
 		// 正面冲突。旅行 / 成长任务 / 连登管家都走上报与领奖 RPC，照常参与
 		// （吸收上游 b1a2284 的口径修正）。
 		if !blackcatEligible(st) {
+			continue
+		}
+		// 面板「暂停任务」：夜猫子是整条排程里唯一纯真实对话的任务，被暂停的账号
+		// 必须跳过（全局 / 分组 / 单号三档由面板判据合并），否则「只留签到回血」
+		// 的意图会被这一项每晚 3 次对话抵消。
+		if s.tasksPaused(st.UID) {
 			continue
 		}
 		a := s.cfg.Pool.AuthByUID(st.UID)

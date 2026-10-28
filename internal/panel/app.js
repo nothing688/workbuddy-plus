@@ -8,6 +8,9 @@ let overviewData = null, cfgLoaded = null, updateData = null, updateBusy = false
    tbody，这些必须存在 DOM 之外，否则刚测出来的结果、刚选的分组会被下一轮刷新抹掉。
    accGroupFilter：null = 全部；'' = 未分组；其它 = 分组名。 */
 let groupsData = [], accGroupFilter = null, metaUID = null;
+/* 任务暂停三档（全局 / 分组 / 单号）：来自 overview 的 tasks_paused*，5s 轮询同步。 */
+let tasksPausedAll = false;
+const pausedAccounts = new Set(), pausedGroups = new Set();
 // 账号池的本地筛选：关键词（备注/昵称/uid，空格分词 AND）与状态。
 // 只影响查看范围，不改变服务端分组/调用池。
 let accQuery = '', accStatus = '';
@@ -687,6 +690,12 @@ function renderAccounts(list, filtered, probe) {
       tag = '<span class="tag bad" title="' + esc('可用性测试：' + why) + '">测试不可用</span>';
     }
     const note = '';
+    // 「任务暂停」与「可用/冷却」是两回事：账号照常接单，只是不再自动跑任务。
+    // 单独追一个标签（不覆盖状态标签），否则运维只看到「可用」会以为任务还在跑。
+    const taskPaused = tasksPausedAll || pausedAccounts.has(s.uid) || (!!s.group && pausedGroups.has(s.group));
+    const tpTag = taskPaused
+      ? '<span class="tag warn" title="' + esc(tasksPausedAll ? '全局「暂停任务」已开启' : (s.group && pausedGroups.has(s.group) ? '分组「' + s.group + '」任务已暂停' : '该账号任务已暂停')) + '">任务暂停</span>'
+      : '';
     const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
     // 企业版不限量：上游 limitNum == -1，网关以 credits_total=-1 透出（见 upstream
@@ -753,7 +762,7 @@ function renderAccounts(list, filtered, probe) {
       '<td class="who"><div class="nm">' + nameCell + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div>' +
         '<div class="id">' + esc(short) + '</div>' +
         (grpCell ? '<div class="grp-line">' + grpCell + '</div>' : '') + '</td>' +
-      '<td data-label="状态">' + tag + statusWhyHtml(s, pr) + note + rateLimits + '</td>' +
+      '<td data-label="状态">' + tag + tpTag + statusWhyHtml(s, pr) + note + rateLimits + '</td>' +
       '<td class="cred" data-label="积分" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num" data-label="成功 / 失败">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
       '<td class="num" data-label="在途">' + (s.in_flight || 0) + '</td>' +
@@ -779,6 +788,13 @@ function renderAccounts(list, filtered, probe) {
               ? ' title="只读探测上游是否已解封：不 revive、不参与选号、不改任何状态"'
               : ' title="向上游发一次极小对话，确认该账号此刻真的可用"') +
             '>测试</button>'),
+        (frozen || !personal ? ''
+          : (tasksPausedAll
+              // 全局暂停时逐号开关没有意义：指向任务中心的全局恢复，避免点了没反应。
+              ? '<button class="xs ghost" data-a="none" disabled title="全局「暂停任务」已开启，请到任务中心恢复">全局暂停</button>'
+              : (taskPaused
+                ? '<button class="xs primary" data-a="taskresume" data-u="' + esc(s.uid) + '" title="恢复该账号的自动任务（成长队列 / 新号任务 / 夜猫子）">恢复任务</button>'
+                : '<button class="xs ghost" data-a="taskpause" data-u="' + esc(s.uid) + '" title="暂停该账号的自动任务（会消耗积分）；签到、旅行、活跃、保活照常">停任务</button>'))),
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')),
@@ -960,6 +976,7 @@ function paintAccounts() {
   renderAccounts(list, accGroupFilter != null || accQuery !== '' || accStatus !== '', { busy: probeBusy, res: probeResult });
   syncAccSortHead();
   syncStatFilter();
+  syncGroupTaskPauseBtn(); // 分组筛选变了，组级「停任务」按钮的可见性与文案跟着变
 }
 
 // loadGroups 取分组计数（GET /groups）。失败保留旧列表：后端未就绪时筛选停在「全部」，
@@ -1647,19 +1664,38 @@ async function loadOverview(quiet) {
     $('sDisabled').textContent = d.disabled;
     // 暂停选号单列（issue #125）：它只关选号、照常签到保活，与禁用是两种状态。
     if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
-    // 积分口径（两个数分母不同，标签里已标注）：剩余合计**排除已禁用账号**——它们不参与
-    // 选号，账上的剩余额度实际上花不出去；总额合计**包含全部账号**，看的是保有量。
-    const remSum = accs.reduce((a, s) => a + (s.disabled ? 0 : (s.credits || 0)), 0);
-    const totSum = accs.reduce((a, s) => a + (s.credits_total || 0), 0);
+    // 积分口径：剩余与总额**都排除已禁用账号**——禁用号不参与选号，账上的额度
+    // 既花不出去也不该计入保有量。总额取各账号的套餐容量合计（credits_total 已含
+    // 已用部分，等于「发过的全部额度」），不是剩余。
+    const liveAccs = accs.filter(s => !s.disabled);
+    const remSum = liveAccs.reduce((a, s) => a + (s.credits || 0), 0);
+    // credits_total < 0 是「企业版不限量」的标记（-1），不是真实额度：算进去等于无端减 1。
+    const totSum = liveAccs.reduce((a, s) => a + ((s.credits_total || 0) > 0 ? s.credits_total : 0), 0);
     // 总额用小字跟在斜杠后：长数字在窄卡片里可折行，不会顶出边框。
     $('sCredits').innerHTML = totSum > 0
       ? String(remSum) + '<span class="of">/ ' + totSum + '</span>'
       : String(remSum);
     if (typeof fitCreditsCard === 'function') fitCreditsCard();
     $('sCredits').title = d.disabled
-      ? '剩余合计（不含已禁用 ' + d.disabled + ' 个账号）/ 总额合计（含全部账号）'
-      : '剩余合计 / 总额合计（均含全部账号）';
+      ? '剩余合计 / 总额合计（均不含已禁用 ' + d.disabled + ' 个账号；总额含已使用额度）'
+      : '剩余合计 / 总额合计（总额含已使用额度）';
     $('sSticky').textContent = d.sticky_sessions;
+    // 任务暂停态：按钮文案/高亮跟随 overview（5 秒轮询），点按钮是唯一写入口。
+    tasksPausedAll = !!d.tasks_paused;
+    pausedAccounts.clear();
+    for (const u of (d.tasks_paused_accounts || [])) pausedAccounts.add(u);
+    pausedGroups.clear();
+    for (const g of (d.tasks_paused_groups || [])) pausedGroups.add(g);
+    syncGroupTaskPauseBtn();
+    const tp = $('btnTaskPause');
+    if (tp) {
+      const paused = !!d.tasks_paused;
+      tp.textContent = paused ? '恢复任务' : '暂停任务';
+      tp.classList.toggle('primary', paused);
+      tp.title = paused
+        ? '自动任务已暂停：成长队列 / 新号自动任务 / 夜猫子都不再触发；签到、旅行、活跃上报、保活、补领清扫照常'
+        : '暂停后不再自动跑会消耗积分的任务（成长队列 / 新号自动任务 / 夜猫子）；签到等回血任务照常';
+    }
     if (typeof renderUpdateStatus === 'function') renderUpdateStatus(d.update || { current_version: d.version });
     if (d.update && d.update.update_available &&
       (!previousUpdate || !previousUpdate.update_available || previousUpdate.latest_version !== d.update.latest_version)) {
@@ -1766,6 +1802,10 @@ $('accBody').addEventListener('click', async ev => {
     } else if (a === 'resume') {
       await api('accounts/' + encodeURIComponent(u) + '/resume', { method: 'POST' });
       toast('已恢复选号', 'ok');
+    } else if (a === 'taskpause' || a === 'taskresume') {
+      const paused = a === 'taskpause';
+      await api('tasks/pause/batch', { method: 'POST', body: JSON.stringify({ accounts: [u], paused }) });
+      toast(paused ? '该账号自动任务已暂停（签到 / 旅行 / 保活照常）' : '该账号自动任务已恢复', 'ok');
     } else if (a === 'tasks') {
       openTasks(u);
     } else if (a === 'remove') {
@@ -1866,14 +1906,48 @@ if ($('accStatus')) {
 /* ── 批量操作（多选工具条）───────────────────────────────────────────
    逐号调用既有的单号接口，并发 3；失败不中断其余账号，结束后汇总。
    remove 会删 auths/ 下的凭证文件，确认文案单独加重。 */
+// syncGroupTaskPauseBtn 分组级「停任务」按钮：只在查看某个具体分组时出现，
+// 文案/高亮跟随该组是否已暂停（状态来自 overview 的 tasks_paused_groups）。
+function syncGroupTaskPauseBtn() {
+  const b = $('btnGroupTaskPause');
+  if (!b) return;
+  const g = accGroupFilter;
+  if (!g) { b.hidden = true; return; }
+  const on = pausedGroups.has(g);
+  b.hidden = false;
+  b.textContent = on ? '恢复本组任务' : '本组停任务';
+  b.classList.toggle('primary', on);
+  b.title = on
+    ? '恢复「' + g + '」分组所有账号的自动任务'
+    : '暂停「' + g + '」分组所有账号的自动任务（成长队列 / 新号任务 / 夜猫子会消耗积分）；签到、旅行、活跃上报、保活照常';
+}
+
 async function batchAccounts(kind) {
-  const labels = { disable: '禁用', pause: '暂停选号', revive: '解冻', remove: '移除' };
+  const labels = { disable: '禁用', pause: '暂停选号', revive: '解冻', remove: '移除', taskpause: '暂停任务', taskresume: '恢复任务' };
   const label = labels[kind];
   if (!label) return;
   const uids = Array.from(accSel);
   if (!uids.length) { toast('还没有勾选账号', 'warn'); return; }
   const extra = kind === 'remove' ? '\n移除会删除 auths/ 下的凭证文件，不可恢复。' : '';
   if (!confirm('将对已选 ' + uids.length + ' 个账号执行「' + label + '」。' + extra + '\n继续？')) return;
+
+  // 任务暂停是「一个请求带一批 uid」，不走下面逐号的 accounts/{uid}/... 循环。
+  if (kind === 'taskpause' || kind === 'taskresume') {
+    const btns = Array.from(document.querySelectorAll('[data-batch]'));
+    btns.forEach(b => { b.disabled = true; });
+    try {
+      const paused = kind === 'taskpause';
+      const r = await api('tasks/pause/batch', { method: 'POST', body: JSON.stringify({ accounts: uids, paused }) });
+      pausedAccounts.clear();
+      for (const x of (r.accounts || [])) pausedAccounts.add(x);
+      accSel.clear();
+      await loadOverview(true);
+      paintAccounts();
+      toast((paused ? '已暂停 ' : '已恢复 ') + uids.length + ' 个账号的自动任务（签到等回血任务照常）', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+    finally { btns.forEach(b => { b.disabled = false; }); }
+    return;
+  }
 
   const btns = Array.from(document.querySelectorAll('[data-batch]'));
   btns.forEach(b => { b.disabled = true; });
@@ -1911,6 +1985,25 @@ async function batchAccounts(kind) {
 Array.from(document.querySelectorAll('[data-batch]')).forEach(b => {
   b.onclick = () => batchAccounts(b.dataset.batch);
 });
+if ($('btnGroupTaskPause')) $('btnGroupTaskPause').onclick = async () => {
+  const g = accGroupFilter;
+  if (!g) return;
+  const next = !pausedGroups.has(g);
+  if (next && !confirm('暂停「' + g + '」分组所有账号的自动任务（成长队列 / 新号任务 / 夜猫子会消耗积分）。\n'
+    + '签到、旅行、活跃上报、保活照常——签到仍是自动回血路径。\n\n继续？')) return;
+  const b = $('btnGroupTaskPause');
+  b.disabled = true;
+  try {
+    const r = await api('tasks/pause/batch', { method: 'POST', body: JSON.stringify({ groups: [g], paused: next }) });
+    pausedGroups.clear();
+    for (const x of (r.groups || [])) pausedGroups.add(x);
+    syncGroupTaskPauseBtn();
+    toast(next ? '「' + g + '」分组自动任务已暂停' : '「' + g + '」分组自动任务已恢复', 'ok');
+    await loadOverview(true);
+    paintAccounts();
+  } catch (e) { toast(e.message, 'err'); }
+  finally { b.disabled = false; }
+};
 // 多选开关：勾选列默认隐藏，点「多选」才出现；退出时清空选择，避免残留。
 if ($('btnSelMode')) $('btnSelMode').onclick = () => {
   selMode = !selMode;
@@ -3690,6 +3783,22 @@ $('btnScanAll').onclick = async () => {
     renderQueue(groupItems(d), null, '未发现可自动执行的待办', '当前扫描范围没有可自动执行的任务；跳过和扫描失败的账号会单独列出。');
   } catch (e) { toast(e.message, 'err'); }
   finally { b.disabled = false; b.textContent = '扫描待办'; }
+};
+$('btnTaskPause').onclick = async () => {
+  const b = $('btnTaskPause');
+  const next = b.textContent !== '恢复任务'; // 当前未暂停 → 本次动作是暂停
+  if (next && !confirm(
+    '暂停后：成长任务队列、新号自动任务、夜猫子夜聊都不再自动触发（后两者会消耗积分）。\n' +
+    '签到、活跃上报、猫猫旅行、token 保活、补领清扫照常运行——签到仍是自动回血路径。\n' +
+    '面板手动「执行全部待办 / 单任务 / 一键完成」不受影响。\n\n确定暂停？')) return;
+  b.disabled = true;
+  try {
+    const r = await api('tasks/pause', { method: 'POST', body: JSON.stringify({ paused: next }) });
+    toast(r.paused ? '自动任务已暂停（签到等回血任务照常）' : '自动任务已恢复', 'ok');
+    b.textContent = r.paused ? '恢复任务' : '暂停任务';
+    b.classList.toggle('primary', !!r.paused);
+  } catch (e) { toast(e.message, 'err'); }
+  finally { b.disabled = false; }
 };
 $('btnRunQueue').onclick = async () => {
   const conc = Number($('qcConc').value) || 1;

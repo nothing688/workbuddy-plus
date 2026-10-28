@@ -367,11 +367,11 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
    导致 vertical-align:middle 失效（按钮整体偏上、行线不齐）。这里强制恢复
    table-cell，让该列和其他列一样参与行高与垂直居中；按钮排列交给内层 .acts-inner。 */
 td.acts { display: table-cell; vertical-align: middle; text-align: right; }
-/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 测试 / 选号 / 禁用 / 移除），
+/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 测试 / 停任务 / 选号 / 禁用 / 移除），
    缺哪个留空槽。否则「解冻 / 暂停选号 / 恢复选号」互斥会改变按钮个数，整列左右错位。
    分列放在内层 div：td 保持 table-cell，vertical-align:middle 才继续生效
    （直接给 td 设 display:grid 会退出表格布局，按钮变顶对齐）。 */
-.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(2, 54px); gap: 5px; justify-content: end; align-items: center; }
+.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); gap: 5px; justify-content: end; align-items: center; }
 /* 统一盒模型：primary 与 ghost 的边框/行高不同会让「解冻」行比「暂停选号」行高 2~3px，
    行线因此参差。固定高度 + border-box 后每行等高、按钮底边对齐。 */
 .acts-inner button { width: 100%; height: 26px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -1593,7 +1593,7 @@ input::placeholder { color: var(--ink-3); }
         <div class="stat good" data-status="healthy" role="button" tabindex="0" title="点击只看可用账号；再点取消筛选"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
         <div class="stat warn" data-status="cooling" role="button" tabindex="0" title="点击只看冷却/异常账号；再点取消筛选"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat warn" data-status="paused" role="button" tabindex="0" title="点击只看暂停选号的账号；再点取消筛选"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计不含已禁用账号（它们不参与选号）；总额合计含全部账号">积分 剩余 / 总额</div></div>
+        <div class="stat"><div class="v" id="sCredits">-</div><div class="k" title="剩余合计 / 总额合计均不含已禁用账号；总额是已发全部额度，含已使用部分">积分 剩余 / 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
         <div class="stat bad" data-status="disabled" role="button" tabindex="0" title="点击只看已禁用账号；再点取消筛选"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
       </div>
@@ -1636,6 +1636,7 @@ input::placeholder { color: var(--ink-3); }
           <button class="xs" id="btnSelMode" title="进入多选：勾选账号后可批量移动到分组；再次点击退出并清空选择">多选</button>
           <button class="xs" id="btnProbeAll" title="逐个测试当前筛选范围内的账号：正常号发一次真实对话（消耗额度），封禁/冷却号只做只读解封探测">全部测试</button>
           <button class="xs" id="btnNewGroup" title="新建一个分组（可先空着，之后把账号移进去）">新建分组</button>
+          <button class="xs" id="btnGroupTaskPause" hidden title="暂停/恢复当前分组所有账号的自动任务（成长队列 / 新号任务 / 夜猫子）；签到等回血任务照常">本组停任务</button>
           <span class="hint">不带分组参数的请求走当前调用池</span>
           <span class="grow"></span>
           <!-- 多选工具条：无勾选时整块 hidden；全选只作用于当前筛选范围 -->
@@ -1644,6 +1645,8 @@ input::placeholder { color: var(--ink-3); }
             <button class="xs" id="btnAccMove" title="把已选账号整批移动到某个分组（也可移出分组）">移动到分组</button>
             <button class="xs ghost" data-batch="disable" title="禁用已选账号（不再参与选号，可随时解冻）">禁用</button>
             <button class="xs ghost" data-batch="pause" title="已选账号暂停选号（仍照常保号）">暂停</button>
+            <button class="xs ghost" data-batch="taskpause" title="已选账号暂停自动任务（成长队列 / 新号任务 / 夜猫子会消耗积分）；签到、旅行、保活照常">停任务</button>
+            <button class="xs ghost" data-batch="taskresume" title="已选账号恢复自动任务">恢复任务</button>
             <button class="xs ghost" data-batch="revive" title="解冻已选账号并清除冷却/熔断">解冻</button>
             <button class="xs ghost danger" data-batch="remove" title="移除已选账号（删除凭证文件，不可恢复）">移除</button>
             <button class="xs ghost" id="btnAccSelClear" title="清除全部勾选">清除选择</button>
@@ -1701,6 +1704,7 @@ input::placeholder { color: var(--ink-3); }
             <select id="qcConc"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
           </label>
           <button class="xs" id="btnSchoolVouchers" title="开学季抽奖抽中的第三方券码（活动已结束，历史券码仍可查）">查询券码</button>
+          <button class="xs" id="btnTaskPause" title="暂停后不再自动跑会消耗积分的任务（成长队列 / 新号自动任务 / 夜猫子）；签到、旅行、活跃上报、保活、补领清扫照常">暂停任务</button>
           <button class="xs" id="btnScanAll">扫描待办</button>
           <button class="xs" id="btnTaskJobsReload">刷新进度</button>
           <button class="xs primary" id="btnRunQueue">执行全部待办</button>

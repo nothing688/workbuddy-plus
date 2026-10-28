@@ -8,11 +8,28 @@ package panel
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
 	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
 	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
+
+// 领奖连续失败后的退避：同一个 (账号, 任务) 连续失败 sweepClaimFailLimit 次后，
+// 跳过 sweepClaimBackoff，到点再试。为什么需要：清扫每 15 分钟一轮，一条永远领不
+// 下来（上游 400「task not completed」、任务被回滚成未达标）的任务会 96 次/天重试，
+// 日志刷屏且持续打上游——不是积分问题（领奖不扣分），但属于纯粹的无谓流量。
+const (
+	sweepClaimFailLimit = 3
+	sweepClaimBackoff   = 6 * time.Hour
+)
+
+// sweepFailState 单任务退避状态（内存表：进程重启后退避清零，下一轮重新判断。
+// 领奖幂等，重试本身无害，所以不需要落盘）。
+type sweepFailState struct {
+	fails int
+	until time.Time
+}
 
 // RunTaskSweepNow 一轮清扫（scheduler 周期调用）。返回 (清扫账号数, 摘要)。
 // 已禁用 / 国际区 / 企业版账号一个上游请求都不发（门控与任务中心扫描一致）；
@@ -21,6 +38,12 @@ func (p *Panel) RunTaskSweepNow() (int, string) {
 	if p.cfg.Pool == nil || p.cfg.Upstream == nil {
 		return 0, "账号池未接线"
 	}
+	// 防重入：定时器每 15 分钟一轮，管理端 / 面板按钮可随时手动触发。两轮重叠会
+	// 让同一账号的列表与领奖请求翻倍（per-account 锁只挡住动作，不挡重复清扫）。
+	if !p.sweeping.CompareAndSwap(false, true) {
+		return 0, "上一轮清扫尚未结束，跳过"
+	}
+	defer p.sweeping.Store(false)
 	var swept, busy, accepted, claimed, failed int
 	for _, st := range p.cfg.Pool.List() {
 		if st.Disabled || st.Realm == "global" {
@@ -97,6 +120,9 @@ func (p *Panel) sweepAccount(a *auth.Auth) (accepted, claimed int, err error) {
 		if !t.Claimable || t.Locked {
 			continue // 锁定 = 上游未解锁（Sequential 族每日解锁一环），领也领不到
 		}
+		if p.sweepClaimBackingOff(a.UID, t.TaskCode) {
+			continue // 连续失败已退避：等窗口过了再试，不刷日志
+		}
 		// mp 专属码走 mp 领奖（自带 Web 域 400 降级）；只在 mp 列表出现的码同办，
 		// 否则 Web 域对 mp 任务 400 会变成每轮一条 WARN。
 		var cerr error
@@ -106,9 +132,10 @@ func (p *Panel) sweepAccount(a *auth.Auth) (accepted, claimed int, err error) {
 			_, _, cerr = p.cfg.Upstream.ClaimReward(a, t.TaskCode)
 		}
 		if cerr != nil {
-			log.Printf("WARN: 补领 %s %s: %v", label, t.TaskCode, cerr)
+			p.noteSweepClaimFail(a.UID, t.TaskCode, label, cerr)
 			continue
 		}
+		p.clearSweepClaimFail(a.UID, t.TaskCode)
 		claimed++
 	}
 	return accepted, claimed, nil
@@ -125,4 +152,41 @@ func acceptPendingCodes(tasks []upstream.Task) []string {
 		}
 	}
 	return codes
+}
+
+// sweepClaimBackingOff 该任务是否还在退避窗口内。
+func (p *Panel) sweepClaimBackingOff(uid, code string) bool {
+	p.sweepMu.Lock()
+	defer p.sweepMu.Unlock()
+	st, ok := p.sweepFail[uid+"|"+code]
+	return ok && time.Now().Before(st.until)
+}
+
+// noteSweepClaimFail 记一次领奖失败；连续失败到阈值后开始退避，只在进入退避时打一条
+// WARN（其余轮次静默跳过），避免每 15 分钟刷同一行。
+func (p *Panel) noteSweepClaimFail(uid, code, label string, err error) {
+	p.sweepMu.Lock()
+	defer p.sweepMu.Unlock()
+	if p.sweepFail == nil {
+		p.sweepFail = map[string]sweepFailState{}
+	}
+	key := uid + "|" + code
+	st := p.sweepFail[key]
+	st.fails++
+	if st.fails < sweepClaimFailLimit {
+		p.sweepFail[key] = st
+		log.Printf("WARN: 补领 %s %s: %v", label, code, err)
+		return
+	}
+	st.until = time.Now().Add(sweepClaimBackoff)
+	p.sweepFail[key] = st
+	log.Printf("WARN: 补领 %s %s: 连续 %d 次失败（%v），退避 %s 再试",
+		label, code, st.fails, err, sweepClaimBackoff)
+}
+
+// clearSweepClaimFail 领奖成功后清掉退避记录。
+func (p *Panel) clearSweepClaimFail(uid, code string) {
+	p.sweepMu.Lock()
+	defer p.sweepMu.Unlock()
+	delete(p.sweepFail, uid+"|"+code)
 }

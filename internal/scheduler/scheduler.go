@@ -75,6 +75,11 @@ type Config struct {
 	// SweepRunner 补领清扫执行器：main 注入 panel.RunTaskSweepNow。
 	// 未注入（nil）时排程静默跳过（同 GrowthRunner）。
 	SweepRunner func() (int, string)
+
+	// PausedFor 面板「暂停任务」判据（按账号）：true 时跳过该账号会消耗积分的自动任务
+	// （夜猫子夜聊；成长队列由 panel 自己按同一判据挡住）。签到 / 活跃 / 旅行 / 保活 /
+	// 余额刷新不受影响——它们不发对话，签到还是唯一的自动回血路径。nil = 从不暂停。
+	PausedFor func(uid string) bool
 	// JitterMinutes 名义整点之后的确定性偏移窗口。0 = 精确整点。
 	JitterMinutes int
 	// AccountSpreadMinutes 账号级摊开窗口（issue #45）：排程触发的账号遍历型任务

@@ -18,6 +18,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -134,6 +135,19 @@ type Panel struct {
 	taskMu    sync.Mutex
 	taskLocks map[string]*sync.Mutex
 
+	// taskGuard 任务动作「无收益重跑」熔断（见 taskguard.go）：动作跑完但进度
+	// 没点亮记一轮，连续 maxStuckRuns 轮后从自动队列剔除，手动执行不受影响。
+	taskGuard *taskGuard
+
+	// taskPause 自动任务总开关（见 taskpause.go）：暂停后成长队列 / 新号自动任务 /
+	// 夜猫子不再触发，签到等回血任务照旧。
+	taskPause *taskPause
+
+	// sweeping 补领清扫的全局防重入；sweepFail 领奖失败退避表（见 tasksweep.go）。
+	sweeping  atomic.Bool
+	sweepMu   sync.Mutex
+	sweepFail map[string]sweepFailState
+
 	// batchRunning 手动全量运维接口（签到/旅行/活跃/保活/余额）共用的防重入闸门：
 	// 这些动作都是逐号打上游，并发跑两轮 = 每号至少翻倍上游请求，正是批间节流
 	// 要避免的场景。TryLock 语义，见 tryStartBatch。
@@ -248,6 +262,14 @@ func New(cfg Config) *Panel {
 		logs:    NewRing(500),
 		logins:  map[string]loginSession{},
 	}
+	// 熔断表与后台作业状态同目录（<DataDir>），重启后仍记得哪些任务在空转。
+	guardPath, pausePath := "", ""
+	if cfg.DataDir != "" {
+		guardPath = filepath.Join(cfg.DataDir, "task_attempts.json")
+		pausePath = filepath.Join(cfg.DataDir, "task-pause.json")
+	}
+	p.taskGuard = newTaskGuard(guardPath)
+	p.taskPause = newTaskPause(pausePath)
 	p.routes()
 	return p
 }
@@ -320,6 +342,12 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/tasks/scan_all", p.withAuth(p.tasksScanAll))
 	p.mux.HandleFunc("POST /panel/api/tasks/run_queue", p.withAuth(p.tasksRunQueue))
 	p.mux.HandleFunc("GET /panel/api/tasks/queue", p.withAuth(p.tasksQueueStatus))
+	// 任务暂停：一键停掉会消耗积分的自动任务（成长队列 / 新号自动任务 / 夜猫子），
+	// 签到等回血链路不受影响。见 taskpause.go。
+	p.mux.HandleFunc("GET /panel/api/tasks/pause", p.withAuth(p.taskPauseGet))
+	p.mux.HandleFunc("POST /panel/api/tasks/pause", p.withAuth(p.taskPauseSet))
+	// 按账号 / 分组批量暂停任务（账号池多选与分组按钮用）。
+	p.mux.HandleFunc("POST /panel/api/tasks/pause/batch", p.withAuth(p.taskPauseBatch))
 	p.mux.HandleFunc("GET /panel/api/tasks/jobs", p.withAuth(p.taskJobsHandler))
 	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks/job", p.withAuth(p.taskJobStatus))
 	p.mux.HandleFunc("POST /panel/api/checkin_all", p.withAuth(p.checkinAll))
@@ -446,6 +474,10 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
 		"balance_refresh_sec":  p.balanceRefreshSec(),
 		"balance_refreshed_at": p.balanceRefreshedAt(),
+		// 自动任务是否被「暂停任务」挡住（全局 / 分组 / 单号三档，前端据此显示状态）。
+		"tasks_paused":          p.TasksPaused(),
+		"tasks_paused_accounts": p.taskPauseAccounts(),
+		"tasks_paused_groups":   p.taskPauseGroups(),
 	})
 }
 

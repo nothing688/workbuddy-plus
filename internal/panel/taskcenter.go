@@ -235,12 +235,20 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 // 后台任务（taskjobs）。账号正在执行时复用现有作业；网络查询与动作全部由后台
 // 处理，调度器不等待完整扫描。装配期注入 scheduler（SetGrowthRunner）。
 func (p *Panel) RunGrowthQueueNow() (int, string) {
+	if p.TasksPaused() {
+		return 0, "成长任务已暂停（面板「暂停任务」）"
+	}
 	if p.cfg.AutoTasksEnabled == nil || !p.cfg.AutoTasksEnabled() {
 		return 0, "成长任务未启用"
 	}
-	started := 0
+	started, paused := 0, 0
 	for _, st := range p.cfg.Pool.List() {
 		if st.Disabled || st.Realm == "global" {
+			continue
+		}
+		// 单号 / 分组「暂停任务」：跳过该账号的自动队列（签到等回血任务不受影响）。
+		if p.AccountTasksPaused(st.UID) {
+			paused++
 			continue
 		}
 		if _, fresh, err := p.StartAccountTaskJob(st.UID, "daily"); err != nil {
@@ -250,7 +258,10 @@ func (p *Panel) RunGrowthQueueNow() (int, string) {
 		}
 	}
 	if started > 0 {
-		log.Printf("panel: 定时后台任务已启动（%d 个账号）", started)
+		log.Printf("panel: 定时后台任务已启动（%d 个账号，暂停 %d 个）", started, paused)
+	}
+	if started == 0 && paused > 0 {
+		return 0, fmt.Sprintf("%d 个账号的任务已暂停，本轮无自动任务", paused)
 	}
 	return started, "后台任务已排队"
 }
@@ -541,7 +552,7 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) autoTaskOutcome {
 	if act == nil {
 		return autoTaskOutcome{Status: "error", Message: fmt.Sprintf("任务 %s 无自动动作", code)}
 	}
-	return p.executeAutoTask(a, act)
+	return p.executeAutoTaskMode(a, act, true)
 }
 
 // tasksQueueStatus 队列状态（轮询用）。
