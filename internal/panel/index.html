@@ -1513,8 +1513,9 @@ input::placeholder { color: var(--ink-3); }
     <div class="brand" id="brandToggle" role="button" tabindex="0"
          title="收起/展开侧边栏" aria-label="收起或展开侧边栏" aria-expanded="true">
       <div class="name">WorkBuddy2API</div>
+      <!-- 侧栏标题区只留更新提示，不显示版本号（版本见「设置」页 navVer）。
+           长/非标准版本号会在此处换行，把标题挤成多行。 -->
       <div class="brand-version">
-        <div class="sub" id="navSub">v-</div>
         <button type="button" class="version-update" id="navUpdate" hidden>有更新</button>
       </div>
     </div>

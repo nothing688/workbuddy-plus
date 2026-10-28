@@ -1491,7 +1491,7 @@ function renderUpdateStatus(update) {
   if (!update) return;
   updateData = update;
   const local = displayVersion(update.current_version);
-  $('navSub').textContent = local;
+  // 侧栏标题区不再显示版本号（见 index.html .brand），版本只在「设置」页出现。
   $('navVer').textContent = local;
   $('navUpdate').hidden = !update.update_available;
   $('navUpdate').textContent = '有更新';
