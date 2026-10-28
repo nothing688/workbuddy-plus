@@ -18,6 +18,11 @@
 
 ---
 
+> [!TIP]
+> **接手开发 / 自动化部署，先看 [AGENTS.md](AGENTS.md)**：目录地图、三种部署路径、面板任务体系的三道闸、
+> 扩展点（加任务动作 / 加排程 / 加面板接口）、环境坑与排查手册都在那里。
+> 新环境一条命令起跑：`scripts/dev_bootstrap.sh`（有 Go 直接构建，没有就按 `go.mod` 的版本下载）。
+
 > [!IMPORTANT]
 > **本仓是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 删库后延续下来的自用增强分支**
 > （链路：删库的原仓 → [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) → 本仓）；直接上游已于 **2026-10-21 停更**，此后由本仓独立维护，不提供任何官方支持或 SLA。
