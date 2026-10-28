@@ -1447,6 +1447,19 @@ input::placeholder { color: var(--ink-3); }
 .acts-inner { gap: 3px; }
 .acts-inner button { padding: 0 8px; font-size: 11.5px; }
 
+/* 账号表名称必须单行省略。
+   上面 .who .nm 的 flex / white-space:normal / word-break 规则是给模型表
+   （.mid 撑开）用的，选择器没限定表，漏到账号表后中文昵称会按字换行——
+   窄卡片里就出现「怎」单独一行、「样共勉」挤在下一行的断字。这里按表名收口。 */
+#accTable .who .nm {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  white-space: nowrap; word-break: normal; overflow: hidden;
+}
+#accTable .who .nm .nm-btn {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#accTable .who .nm .realm-tag { flex: none; }
+
 /* 分组固定在 uid 下方一行，用淡色文本呈现（不再用高亮胶囊） */
 .who .grp-line { margin-top: 2px; }
 .who .grp-line .grp-badge,

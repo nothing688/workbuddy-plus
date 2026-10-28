@@ -753,8 +753,11 @@ function renderAccounts(list, filtered, probe) {
     const nameHtml = noteText
       ? esc(noteText) + '<span class="rm-ghost">' + nickHtml + '</span>'
       : nickHtml;
+    // 名称单行省略（见 index.html #accTable .who .nm），完整值放进 title：
+    // 备注优先，没有备注就是昵称——否则被截断时没地方看全名。
+    const fullName = noteText || String(s.nickname || '');
     const nameCell = '<button class="nm-btn" data-a="meta" data-f="note" data-u="' + esc(s.uid) +
-      '" title="' + esc(noteText ? '名称备注：' + noteText + '（点击修改）' : '点击添加账号名称备注') + '">' + nameHtml + '</button>';
+      '" title="' + esc((fullName ? fullName + ' · ' : '') + (noteText ? '名称备注（点击修改）' : '点击添加账号名称备注')) + '">' + nameHtml + '</button>';
     // 勾选按 uid 从模块级集合恢复：5s 轮询重建 tbody 后选中行不会掉。
     // 顶层单测沙箱里没有 accSel（只切这一段求值），typeof 兜底成未选中。
     const picked = typeof accSel !== 'undefined' && accSel.has(s.uid);
