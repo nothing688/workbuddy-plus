@@ -3201,6 +3201,8 @@ function openAdd() {
   $('importBar').style.width = '0%';
   $('importProgText').textContent = '';
   $('importFile').value = ''; $('importFile').disabled = false;
+  $('importPaste').value = ''; $('importPaste').disabled = false;
+  $('btnImportPaste').disabled = false;
   $('importGroup').value = '';
   $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
@@ -3345,9 +3347,11 @@ $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textCo
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
 // 导入：按文件逐个 POST，多选/多账号一个入口解决。后端每个文件都能识别数组、
 // 包裹对象、JSONL 与字符串 token 列表，前端只负责把选中文件全都送上去。
-$('importFile').onchange = async () => {
-  const files = Array.from($('importFile').files || []);
-  if (!files.length) return;
+// runImport 文件与粘贴共用的导入链路：按「一个来源」逐个 POST，边推进度。
+// files 里的元素只要像 File（有 name + body）即可——粘贴内容会被包成同名 File，
+// 后端只认 multipart 的 file 字段，无需为粘贴单开接口。
+async function runImport(files) {
+  if (!files || !files.length) return;
   $('importDone').hidden = true; $('importErr').hidden = true;
   const importGroup = ($('importGroup').value || '').trim();
   const h = {};
@@ -3370,8 +3374,10 @@ $('importFile').onchange = async () => {
     }
   };
   paintProg(0, files[0] && files[0].name);
-  const input = $('importFile');
+  const input = $('importFile'), pasteBox = $('importPaste'), pasteBtn = $('btnImportPaste');
   input.disabled = true;
+  if (pasteBox) pasteBox.disabled = true;
+  if (pasteBtn) pasteBtn.disabled = true;
   try {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -3399,6 +3405,8 @@ $('importFile').onchange = async () => {
     }
   } finally {
     input.disabled = false;
+    if (pasteBox) pasteBox.disabled = false;
+    if (pasteBtn) pasteBtn.disabled = false;
   }
   if (imported || !failed.length) {
     $('importDone').hidden = false;
@@ -3414,7 +3422,22 @@ $('importFile').onchange = async () => {
   invalidatePackages();
   loadOverview(true);
   loadGroups();
-  $('importFile').value = '';
+}
+
+$('importFile').onchange = () => {
+  runImport(Array.from($('importFile').files || []));
+};
+// 粘贴导入：把文本包成 File 走同一条链路（后端只认 file 字段）。
+// 格式与文件导入完全一致，前端不做解析——解析口径只有后端一份。
+if ($('btnImportPaste')) $('btnImportPaste').onclick = () => {
+  const text = ($('importPaste').value || '').trim();
+  if (!text) { toast('先粘贴账号 JSON 或 token 列表', 'warn'); return; }
+  runImport([new File([text], '粘贴导入.json', { type: 'application/json' })]);
+  $('importPaste').value = '';
+};
+if ($('btnImportPasteClear')) $('btnImportPasteClear').onclick = () => {
+  $('importPaste').value = '';
+  $('importPaste').focus();
 };
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */

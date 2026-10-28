@@ -2748,6 +2748,13 @@ input::placeholder { color: var(--ink-3); }
         <label class="sel-note" style="margin:0 0 8px" title="只跳过「新账号自动跑成长任务」（任务中心，会为点亮判据发真实对话）。导入时的签到、余额查询以及日常保活 / 签到排程都照常，不会漏">
           <input type="checkbox" id="importSkipGrowth"> 跳过导入后的成长任务（签到 / 余额 / 保活照常）
         </label>
+        <textarea id="importPaste" rows="5" spellcheck="false"
+          placeholder='也可以直接粘贴：账号 JSON 数组 / 单个账号对象 / {"accounts":[...]} / 每行一个账号（JSONL）/ access_token 字符串数组'
+          style="width:100%;min-height:96px;font-family:var(--mono);font-size:12.5px;margin-bottom:8px"></textarea>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="xs primary" id="btnImportPaste">导入粘贴内容</button>
+          <button class="xs" id="btnImportPasteClear" title="清空上面的粘贴框">清空</button>
+        </div>
         <input type="file" id="importFile" accept=".json,.txt,application/json" multiple style="margin-bottom:8px">
         <!-- 导入进度：按文件逐个 POST，每完成一个文件刷新一次（含已入池/跳过计数）。
              导入 30 个文件时它不是装饰——没有它整段过程只有一个「没反应」的对话框。 -->
